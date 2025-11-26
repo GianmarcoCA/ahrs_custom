@@ -59,7 +59,7 @@
 #ifdef _WIN32
 static const char* PORT_NAME = "COM1";
 #else  // Unix
-static const char* PORT_NAME = "/dev/ttyACM0";
+static const char* PORT_NAME = "/dev/ttyUSB0";
 #endif // _WIN32
 
 /// @brief  Set the baudrate for the connection (Serial/USB)
@@ -73,7 +73,7 @@ static const uint16_t SAMPLE_RATE_HZ = 1;
 
 // TODO: Update to change the example run time
 /// @brief Example run time
-static const uint32_t RUN_TIME_SECONDS = 30;
+static const uint32_t RUN_TIME_SECONDS = 10;
 ////////////////////////////////////////////////////////////////////////////////
 
 ///

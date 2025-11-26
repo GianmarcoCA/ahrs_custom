@@ -1,0 +1,53 @@
+timestamp;log
+1764175198.013311;INFO : Initializing the connection.
+1764175198.0133727;INFO : Connecting to the device on port /dev/ttyUSB0 with 115200 baudrate.
+1764175198.1882155;INFO : Initializing the device interface.
+1764175198.188307;INFO : Pinging the device.
+1764175198.1987863;INFO : Setting the device to idle.
+1764175198.2096398;INFO : Getting the device information.
+1764175198.2300532;INFO : -------- Device Information --------
+1764175198.2300835;INFO : Name             |      3DMCV7-AHRS
+1764175198.2301142;INFO : Model Number     |        6286-9960
+1764175198.2301307;INFO : Serial Number    |      6286.194785
+1764175198.2301378;INFO : Lot Number       |
+1764175198.2301488;INFO : Options          |  4-16g,250-1kdps
+1764175198.230156;INFO : Firmware Version |           1.2.05
+1764175198.2301624;INFO : ------------------------------------
+1764175198.2301815;INFO : Loading device default settings.
+1764175198.244119;INFO : Initial command reply timeout is 2000ms.
+1764175198.2441525;INFO : Increasing command reply timeout to 16000ms for capture gyro bias.
+1764175198.2441971;WARN : About to capture gyro bias for 15 seconds!
+1764175198.2442262;WARN : Please do not move the device during this time!
+1764175208.28208;WARN : Press 'Enter' when ready...WARN : Capturing gyro bias...
+1764175223.2900255;INFO : Capture gyro bias completed with result: [0.000638, -0.000578, 0.000841]
+1764175223.2900603;INFO : Reverting command reply timeout to 2000ms.
+1764175223.290095;INFO : Getting the base rate for filter data.
+1764175223.3008032;INFO : Decimating filter base rate 1000 by 1000 to stream data at 1Hz.
+1764175223.300825;INFO : Configuring message format for filter data.
+1764175223.3134286;INFO : Configuring a threshold event trigger for roll on trigger instance ID 1.
+1764175223.327526;INFO : Configuring a threshold event trigger for pitch on trigger instance ID 2.
+1764175223.3399734;INFO : Configuring message action instance ID 1 for trigger instance ID 1 (roll).
+1764175223.3508139;INFO : Configuring message action instance ID 2 for trigger instance ID 2 (pitch).
+1764175223.3627253;INFO : Enabling event trigger instance ID 1 (roll).
+1764175223.373638;INFO : Enabling event trigger instance ID 2 (pitch).
+1764175223.3864405;INFO : Configuring sensor-to-vehicle transformation.
+1764175223.3988597;INFO : Enabling the aiding measurement source for magnetometer.
+1764175223.4097297;INFO : Attempting to reset the navigation filter.
+1764175223.4206715;INFO : Registering filter data callbacks.
+1764175223.4206967;INFO : Resuming the device.
+1764175223.43147;INFO : The device is configured... waiting for the filter to enter AHRS mode.
+1764175225.4347992;INFO : The filter has entered AHRS mode. (3) MIP_FILTER_MODE_AHRS
+1764175225.4348562;INFO : This example will now output data for 10s.
+1764175225.4448824;INFO : TOW =  12717.556    Euler Angles = [-0.009024,  0.003336,  1.131081]
+1764175226.4468517;INFO : TOW =  12718.556    Euler Angles = [-0.009205,  0.003457,  1.130829]
+1764175227.4479632;INFO : TOW =  12719.556    Euler Angles = [-0.009179,  0.003362,  1.130843]
+1764175228.4577188;INFO : TOW =  12720.556    Euler Angles = [-0.009552,  0.003544,  1.130965]
+1764175229.4661615;INFO : TOW =  12721.556    Euler Angles = [-0.009488,  0.003471,  1.131142]
+1764175230.4738536;INFO : TOW =  12722.556    Euler Angles = [-0.009392,  0.003442,  1.131245]
+1764175231.4769752;INFO : TOW =  12723.556    Euler Angles = [-0.009446,  0.003453,  1.131415]
+1764175232.477101;INFO : TOW =  12724.556    Euler Angles = [-0.009237,  0.003271,  1.131556]
+1764175233.4777884;INFO : TOW =  12725.556    Euler Angles = [-0.009302,  0.003251,  1.131703]
+1764175234.4784544;INFO : TOW =  12726.556    Euler Angles = [-0.009292,  0.003267,  1.131811]
+1764175235.436225;INFO : Example Completed Successfully.
+1764175235.436415;INFO : Closing the connection.
+1764175235.4436176;INFO : Press 'Enter' to exit the program.
