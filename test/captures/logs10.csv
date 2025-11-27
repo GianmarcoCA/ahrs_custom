@@ -1,77 +1,77 @@
-timestamp;log;tow;roll;pitch;yaw
-1764271248.088435;INFO : Initializing the connection.;;;;
-1764271248.0886266;INFO : Connecting to the device on port /dev/ttyUSB0 with 115200 baudrate.;;;;
-1764271248.2670715;INFO : Initializing the device interface.;;;;
-1764271248.267458;INFO : Pinging the device.;;;;
-1764271248.2789998;INFO : Setting the device to idle.;;;;
-1764271248.2882059;INFO : Getting the device information.;;;;
-1764271248.3088403;INFO : -------- Device Information --------;;;;
-1764271248.309272;INFO : Name             |      3DMCV7-AHRS;;;;
-1764271248.3095357;INFO : Model Number     |        6286-9960;;;;
-1764271248.309692;INFO : Serial Number    |      6286.194785;;;;
-1764271248.3099592;INFO : Lot Number       |;;;;
-1764271248.310241;INFO : Options          |  4-16g,250-1kdps;;;;
-1764271248.3103974;INFO : Firmware Version |           1.2.05;;;;
-1764271248.310737;INFO : ------------------------------------;;;;
-1764271248.311038;INFO : Loading device default settings.;;;;
-1764271248.3196142;INFO : Initial command reply timeout is 2000ms.;;;;
-1764271248.319857;INFO : Increasing command reply timeout to 16000ms for capture gyro bias.;;;;
-1764271248.3199234;WARN : About to capture gyro bias for 15 seconds!;;;;
-1764271248.3199513;WARN : Please do not move the device during this time!;;;;
-1764271279.1569383;WARN : Press 'Enter' when ready...WARN : Capturing gyro bias...;;;;
-1764271294.1659873;INFO : Capture gyro bias completed with result: [0.000410, -0.000454, 0.000903];;;;
-1764271294.166691;INFO : Reverting command reply timeout to 2000ms.;;;;
-1764271294.1672645;INFO : Getting the base rate for sensor data.;;;;
-1764271294.1753469;INFO : Decimating filter base rate 1000 by 1000 to stream data at 1Hz.;;;;
-1764271294.1757765;INFO : Configuring message format for sensor data.;;;;
-1764271294.1894548;INFO : Getting the base rate for filter data.;;;;
-1764271294.1988266;INFO : Decimating filter base rate 1000 by 1000 to stream data at 1Hz.;;;;
-1764271294.1991186;INFO : Configuring message format for filter data.;;;;
-1764271294.2099414;INFO : Configuring a threshold event trigger for roll on trigger instance ID 1.;;;;
-1764271294.2224715;INFO : Configuring a threshold event trigger for pitch on trigger instance ID 2.;;;;
-1764271294.2366862;INFO : Configuring message action instance ID 1 for trigger instance ID 1 (roll).;;;;
-1764271294.2472737;INFO : Configuring message action instance ID 2 for trigger instance ID 2 (pitch).;;;;
-1764271294.2584374;INFO : Enabling event trigger instance ID 1 (roll).;;;;
-1764271294.2709305;INFO : Enabling event trigger instance ID 2 (pitch).;;;;
-1764271294.2805612;INFO : Configuring sensor-to-vehicle transformation.;;;;
-1764271294.2930067;INFO : Enabling the aiding measurement source for magnetometer.;;;;
-1764271294.3044677;INFO : Attempting to reset the navigation filter.;;;;
-1764271294.3145328;INFO : Registering sensor data callbacks.;;;;
-1764271294.3149865;INFO : Registering filter data callbacks.;;;;
-1764271294.3154662;INFO : Resuming the device.;;;;
-1764271294.3253338;INFO : The device is configured... waiting for the filter to enter AHRS mode.;;;;
-1764271296.336278;INFO : The filter has entered AHRS mode. (3) MIP_FILTER_MODE_AHRS;;;;
-1764271296.3370051;INFO : This example will now output data for 10s.;;;;
-1764271296.3470135;INFO : TOW =  16969.473         Comp Euler Angles = [-0.003006,  0.003504,  0.997657];16969.473;-0.003006;0.003504;0.997657
-1764271296.347709;INFO : TOW =  16969.473       Filter Euler Angles = [-0.002549,  0.004055,  0.998286];16969.473;-0.002549;0.004055;0.998286
-1764271296.3477917;INFO : TOW =  16969.473     Filter Euler Angles Uncertainty = [ 0.005377,  0.005377,  0.002120];16969.473;0.005377;0.005377;0.00212
-1764271297.3528495;INFO : TOW =  16970.473         Comp Euler Angles = [-0.002955,  0.003490,  0.997679];16970.473;-0.002955;0.00349;0.997679
-1764271297.3557723;INFO : TOW =  16970.473       Filter Euler Angles = [-0.002500,  0.004075,  0.998086];16970.473;-0.0025;0.004075;0.998086
-1764271297.3569267;INFO : TOW =  16970.473     Filter Euler Angles Uncertainty = [ 0.004220,  0.004220,  0.001630];16970.473;0.00422;0.00422;0.00163
-1764271298.3554046;INFO : TOW =  16971.473         Comp Euler Angles = [-0.002885,  0.003432,  0.997878];16971.473;-0.002885;0.003432;0.997878
-1764271298.3561058;INFO : TOW =  16971.473       Filter Euler Angles = [-0.002449,  0.004036,  0.998022];16971.473;-0.002449;0.004036;0.998022
-1764271298.357488;INFO : TOW =  16971.473     Filter Euler Angles Uncertainty = [ 0.003588,  0.003588,  0.001389];16971.473;0.003588;0.003588;0.001389
-1764271299.3574183;INFO : TOW =  16972.473         Comp Euler Angles = [-0.002885,  0.003401,  0.998125];16972.473;-0.002885;0.003401;0.998125
-1764271299.361154;INFO : TOW =  16972.473       Filter Euler Angles = [-0.002470,  0.004019,  0.998069];16972.473;-0.00247;0.004019;0.998069
-1764271299.3619545;INFO : TOW =  16972.473     Filter Euler Angles Uncertainty = [ 0.003178,  0.003178,  0.001246];16972.473;0.003178;0.003178;0.001246
-1764271300.367894;INFO : TOW =  16973.473         Comp Euler Angles = [-0.002911,  0.003418,  0.998172];16973.473;-0.002911;0.003418;0.998172
-1764271300.370536;INFO : TOW =  16973.473       Filter Euler Angles = [-0.002514,  0.004044,  0.998085];16973.473;-0.002514;0.004044;0.998085
-1764271300.3713658;INFO : TOW =  16973.473     Filter Euler Angles Uncertainty = [ 0.002887,  0.002887,  0.001156];16973.473;0.002887;0.002887;0.001156
-1764271301.3712833;INFO : TOW =  16974.473         Comp Euler Angles = [-0.002771,  0.003356,  0.997869];16974.473;-0.002771;0.003356;0.997869
-1764271301.3727496;INFO : TOW =  16974.473       Filter Euler Angles = [-0.002389,  0.003986,  0.998107];16974.473;-0.002389;0.003986;0.998107
-1764271301.3729517;INFO : TOW =  16974.473     Filter Euler Angles Uncertainty = [ 0.002669,  0.002669,  0.001097];16974.473;0.002669;0.002669;0.001097
-1764271302.3718164;INFO : TOW =  16975.473         Comp Euler Angles = [-0.002712,  0.003393,  0.997864];16975.473;-0.002712;0.003393;0.997864
-1764271302.3738337;INFO : TOW =  16975.473       Filter Euler Angles = [-0.002348,  0.004035,  0.998108];16975.473;-0.002348;0.004035;0.998108
-1764271302.3767009;INFO : TOW =  16975.473     Filter Euler Angles Uncertainty = [ 0.002500,  0.002500,  0.001059];16975.473;0.0025;0.0025;0.001059
-1764271303.3794742;INFO : TOW =  16976.473         Comp Euler Angles = [-0.002645,  0.003299,  0.997355];16976.473;-0.002645;0.003299;0.997355
-1764271303.3799288;INFO : TOW =  16976.473       Filter Euler Angles = [-0.002307,  0.003951,  0.998097];16976.473;-0.002307;0.003951;0.998097
-1764271303.3799899;INFO : TOW =  16976.473     Filter Euler Angles Uncertainty = [ 0.002366,  0.002366,  0.001034];16976.473;0.002366;0.002366;0.001034
-1764271304.383812;INFO : TOW =  16977.473         Comp Euler Angles = [-0.002631,  0.003387,  0.997680];16977.473;-0.002631;0.003387;0.99768
-1764271304.3847046;INFO : TOW =  16977.473       Filter Euler Angles = [-0.002319,  0.004053,  0.998097];16977.473;-0.002319;0.004053;0.998097
-1764271304.385604;INFO : TOW =  16977.473     Filter Euler Angles Uncertainty = [ 0.002258,  0.002258,  0.001019];16977.473;0.002258;0.002258;0.001019
-1764271305.389711;INFO : TOW =  16978.473         Comp Euler Angles = [-0.002768,  0.003453,  0.998187];16978.473;-0.002768;0.003453;0.998187
-1764271305.3911896;INFO : TOW =  16978.473       Filter Euler Angles = [-0.002488,  0.004121,  0.998046];16978.473;-0.002488;0.004121;0.998046
-1764271305.3913562;INFO : TOW =  16978.473     Filter Euler Angles Uncertainty = [ 0.002170,  0.002170,  0.001010];16978.473;0.00217;0.00217;0.00101
-1764271306.3472464;INFO : Example Completed Successfully.;;;;
-1764271306.3499696;INFO : Closing the connection.;;;;
-1764271306.3560932;INFO : Press 'Enter' to exit the program.;;;;
+timestamp;log;tow;data;roll;pitch;yaw;error
+1764272830.888628;INFO : Initializing the connection.;;;;;;
+1764272830.8888264;INFO : Connecting to the device on port /dev/ttyUSB0 with 115200 baudrate.;;;;;;
+1764272832.3016567;INFO : Initializing the device interface.;;;;;;
+1764272832.302255;INFO : Pinging the device.;;;;;;
+1764272832.3127491;INFO : Setting the device to idle.;;;;;;
+1764272832.322742;INFO : Getting the device information.;;;;;;
+1764272832.3410687;INFO : -------- Device Information --------;;;;;;
+1764272832.341412;INFO : Name             |      3DMCV7-AHRS;;;;;;
+1764272832.3414745;INFO : Model Number     |        6286-9960;;;;;;
+1764272832.3415017;INFO : Serial Number    |      6286.194785;;;;;;
+1764272832.341529;INFO : Lot Number       |;;;;;;
+1764272832.341555;INFO : Options          |  4-16g,250-1kdps;;;;;;
+1764272832.341582;INFO : Firmware Version |           1.2.05;;;;;;
+1764272832.3416085;INFO : ------------------------------------;;;;;;
+1764272832.341635;INFO : Loading device default settings.;;;;;;
+1764272832.3536546;INFO : Initial command reply timeout is 2000ms.;;;;;;
+1764272832.3541558;INFO : Increasing command reply timeout to 16000ms for capture gyro bias.;;;;;;
+1764272832.3544924;WARN : About to capture gyro bias for 15 seconds!;;;;;;
+1764272832.354524;WARN : Please do not move the device during this time!;;;;;;
+1764272857.3716784;WARN : Press 'Enter' when ready...WARN : Capturing gyro bias...;;;;;;
+1764272872.3839655;INFO : Capture gyro bias completed with result: [0.000430, -0.000457, 0.000927];;;;;;
+1764272872.385452;INFO : Reverting command reply timeout to 2000ms.;;;;;;
+1764272872.3868306;INFO : Getting the base rate for sensor data.;;;;;;
+1764272872.3951273;INFO : Decimating filter base rate 1000 by 1000 to stream data at 1Hz.;;;;;;
+1764272872.3952641;INFO : Configuring message format for sensor data.;;;;;;
+1764272872.4083338;INFO : Getting the base rate for filter data.;;;;;;
+1764272872.420709;INFO : Decimating filter base rate 1000 by 1000 to stream data at 1Hz.;;;;;;
+1764272872.420792;INFO : Configuring message format for filter data.;;;;;;
+1764272872.4330273;INFO : Configuring a threshold event trigger for roll on trigger instance ID 1.;;;;;;
+1764272872.4455888;INFO : Configuring a threshold event trigger for pitch on trigger instance ID 2.;;;;;;
+1764272872.4581301;INFO : Configuring message action instance ID 1 for trigger instance ID 1 (roll).;;;;;;
+1764272872.470558;INFO : Configuring message action instance ID 2 for trigger instance ID 2 (pitch).;;;;;;
+1764272872.4814396;INFO : Enabling event trigger instance ID 1 (roll).;;;;;;
+1764272872.494411;INFO : Enabling event trigger instance ID 2 (pitch).;;;;;;
+1764272872.5049243;INFO : Configuring sensor-to-vehicle transformation.;;;;;;
+1764272872.517362;INFO : Enabling the aiding measurement source for magnetometer.;;;;;;
+1764272872.5293815;INFO : Attempting to reset the navigation filter.;;;;;;
+1764272872.5419595;INFO : Registering sensor data callbacks.;;;;;;
+1764272872.5420432;INFO : Registering filter data callbacks.;;;;;;
+1764272872.5420732;INFO : Resuming the device.;;;;;;
+1764272872.5512419;INFO : The device is configured... waiting for the filter to enter AHRS mode.;;;;;;
+1764272874.5621014;INFO : The filter has entered AHRS mode. (3) MIP_FILTER_MODE_AHRS;;;;;;
+1764272874.5625577;INFO : This example will now output data for 10s.;;;;;;
+1764272874.5731645;INFO : TOW =  18547.718         Comp Euler Angles = [-0.001995,  0.004012,  0.927401];18547.718;comp;-0.001995;0.004012;0.927401;
+1764272874.5750458;INFO : TOW =  18547.718       Filter Euler Angles = [-0.002380,  0.004041,  0.927729];18547.718;filter;-0.00238;0.004041;0.927729;
+1764272874.5765243;INFO : TOW =  18547.718     Filter Euler Angles Uncertainty = [ 0.005377,  0.005377,  0.002201];18547.718;uncertainty;0.005377;0.005377;0.002201;
+1764272875.5750206;INFO : TOW =  18548.718         Comp Euler Angles = [-0.001997,  0.004026,  0.927931];18548.718;comp;-0.001997;0.004026;0.927931;
+1764272875.5758934;INFO : TOW =  18548.718       Filter Euler Angles = [-0.002389,  0.004096,  0.927581];18548.718;filter;-0.002389;0.004096;0.927581;
+1764272875.5762727;INFO : TOW =  18548.718     Filter Euler Angles Uncertainty = [ 0.004220,  0.004220,  0.001691];18548.718;uncertainty;0.00422;0.00422;0.001691;
+1764272876.5783012;INFO : TOW =  18549.718         Comp Euler Angles = [-0.001980,  0.004005,  0.927446];18549.718;comp;-0.00198;0.004005;0.927446;
+1764272876.5792024;INFO : TOW =  18549.718       Filter Euler Angles = [-0.002372,  0.004114,  0.927612];18549.718;filter;-0.002372;0.004114;0.927612;
+1764272876.579325;INFO : TOW =  18549.718     Filter Euler Angles Uncertainty = [ 0.003588,  0.003588,  0.001439];18549.718;uncertainty;0.003588;0.003588;0.001439;
+1764272877.5860047;INFO : TOW =  18550.718         Comp Euler Angles = [-0.001956,  0.004001,  0.927784];18550.718;comp;-0.001956;0.004001;0.927784;
+1764272877.587545;INFO : TOW =  18550.718       Filter Euler Angles = [-0.002340,  0.004135,  0.927702];18550.718;filter;-0.00234;0.004135;0.927702;
+1764272877.5888448;INFO : TOW =  18550.718     Filter Euler Angles Uncertainty = [ 0.003178,  0.003178,  0.001289];18550.718;uncertainty;0.003178;0.003178;0.001289;
+1764272878.5893514;INFO : TOW =  18551.718         Comp Euler Angles = [-0.001996,  0.003999,  0.927990];18551.718;comp;-0.001996;0.003999;0.92799;
+1764272878.5902214;INFO : TOW =  18551.718       Filter Euler Angles = [-0.002373,  0.004146,  0.927787];18551.718;filter;-0.002373;0.004146;0.927787;
+1764272878.5903928;INFO : TOW =  18551.718     Filter Euler Angles Uncertainty = [ 0.002887,  0.002887,  0.001194];18551.718;uncertainty;0.002887;0.002887;0.001194;
+1764272879.6019008;INFO : TOW =  18552.718         Comp Euler Angles = [-0.002019,  0.004016,  0.927773];18552.718;comp;-0.002019;0.004016;0.927773;
+1764272879.60456;INFO : TOW =  18552.718       Filter Euler Angles = [-0.002391,  0.004172,  0.927832];18552.718;filter;-0.002391;0.004172;0.927832;
+1764272879.605124;INFO : TOW =  18552.718     Filter Euler Angles Uncertainty = [ 0.002669,  0.002669,  0.001131];18552.718;uncertainty;0.002669;0.002669;0.001131;
+1764272880.6073177;INFO : TOW =  18553.718         Comp Euler Angles = [-0.002026,  0.003997,  0.928119];18553.718;comp;-0.002026;0.003997;0.928119;
+1764272880.6075253;INFO : TOW =  18553.718       Filter Euler Angles = [-0.002393,  0.004157,  0.927872];18553.718;filter;-0.002393;0.004157;0.927872;
+1764272880.6075644;INFO : TOW =  18553.718     Filter Euler Angles Uncertainty = [ 0.002500,  0.002500,  0.001089];18553.718;uncertainty;0.0025;0.0025;0.001089;
+1764272881.60901;INFO : TOW =  18554.718         Comp Euler Angles = [-0.002043,  0.004041,  0.927534];18554.718;comp;-0.002043;0.004041;0.927534;
+1764272881.6101036;INFO : TOW =  18554.718       Filter Euler Angles = [-0.002405,  0.004206,  0.927898];18554.718;filter;-0.002405;0.004206;0.927898;
+1764272881.6102755;INFO : TOW =  18554.718     Filter Euler Angles Uncertainty = [ 0.002366,  0.002366,  0.001062];18554.718;uncertainty;0.002366;0.002366;0.001062;
+1764272882.615283;INFO : TOW =  18555.718         Comp Euler Angles = [-0.001610,  0.003861,  0.928099];18555.718;comp;-0.00161;0.003861;0.928099;
+1764272882.6160715;INFO : TOW =  18555.718       Filter Euler Angles = [-0.001948,  0.004022,  0.927890];18555.718;filter;-0.001948;0.004022;0.92789;
+1764272882.6161623;INFO : TOW =  18555.718     Filter Euler Angles Uncertainty = [ 0.002258,  0.002258,  0.001045];18555.718;uncertainty;0.002258;0.002258;0.001045;
+1764272883.6223137;INFO : TOW =  18556.718         Comp Euler Angles = [-0.001533,  0.003862,  0.928068];18556.718;comp;-0.001533;0.003862;0.928068;
+1764272883.6237;INFO : TOW =  18556.718       Filter Euler Angles = [-0.001874,  0.004030,  0.927921];18556.718;filter;-0.001874;0.00403;0.927921;
+1764272883.6240344;INFO : TOW =  18556.718     Filter Euler Angles Uncertainty = [ 0.002170,  0.002170,  0.001035];18556.718;uncertainty;0.00217;0.00217;0.001035;
+1764272884.5645142;INFO : Example Completed Successfully.;;;;;;
+1764272884.5656958;INFO : Closing the connection.;;;;;;
+1764272884.5733917;INFO : Press 'Enter' to exit the program.;;;;;;

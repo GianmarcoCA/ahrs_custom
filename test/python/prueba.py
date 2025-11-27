@@ -32,7 +32,7 @@ SUDO = "sudo"
 
 with open(CSV_OUTPUT_FILE, "w", newline="") as csvfile:
     spamwriter = csv.writer(csvfile, delimiter=';')
-    spamwriter.writerow(["timestamp", "log", "tow", "roll", "pitch", "yaw"]) # encabezado
+    spamwriter.writerow(["timestamp", "log", "tow", "data", "roll", "pitch", "yaw", "error"])
     
     process = subprocess.Popen(
             [SUDO, BINARY_ABS_PATH],
@@ -45,9 +45,11 @@ with open(CSV_OUTPUT_FILE, "w", newline="") as csvfile:
     for line in process.stdout:
         line = line.strip()
         print(line)
+
+        tow = data = roll = pitch = yaw = error = None
  
         if "TOW" not in line:
-            spamwriter.writerow([time.time(), line, None, None, None, None])
+            spamwriter.writerow([time.time(), line, None, None, None, None, None, None])
             csvfile.flush()
             continue
 
@@ -55,6 +57,15 @@ with open(CSV_OUTPUT_FILE, "w", newline="") as csvfile:
             part_tow = line.split("TOW =")[1].split()[0]
             tow     = float(part_tow)                
             
+            if "Comp Euler" in line:
+                data = "comp"
+            elif "Filter Euler Angles Uncertainty" in line:
+                data = "uncertainty"
+            elif "Filter Euler Angles" in line:
+                data = "filter"
+            else:
+                data = "unknown"
+
             inside = line.split("[")[1].split("]")[0]
             parts = inside.split(",")
 
@@ -63,12 +74,11 @@ with open(CSV_OUTPUT_FILE, "w", newline="") as csvfile:
                 pitch   = float(parts[1])
                 yaw     = float(parts[2])
                 
-            else:
-                roll = pitch = yaw = None
-        except:
-            tow = roll = pitch = yaw = None
+        except Exception as e:
+            error = "error"
+            print("Error parseando:", e)
  
-        spamwriter.writerow([time.time(), line, tow, roll, pitch, yaw])
+        spamwriter.writerow([time.time(), line, tow, data, roll, pitch, yaw, error])
         csvfile.flush()   # guardar en disco inmediatamente
         
 process.wait()

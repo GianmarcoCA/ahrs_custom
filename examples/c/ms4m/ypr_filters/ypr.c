@@ -338,27 +338,27 @@ int main(const int argc, const char* argv[])
                     "TOW",
                     sensor_gps_timestamp.tow,
                     "Comp Euler Angles",
-                    sensor_comp_euler.roll,
-                    sensor_comp_euler.pitch,
-                    sensor_comp_euler.yaw
+                    sensor_comp_euler.roll*180/M_PI,
+                    sensor_comp_euler.pitch*180/M_PI,
+                    sensor_comp_euler.yaw*180/M_PI
                 );
                 MICROSTRAIN_LOG_INFO(
                     "%s = %10.3f%26s = [%9.6f, %9.6f, %9.6f]\n",
                     "TOW",
                     filter_gps_timestamp.tow,
                     "Filter Euler Angles",
-                    filter_euler_angles.roll,
-                    filter_euler_angles.pitch,
-                    filter_euler_angles.yaw
+                    filter_euler_angles.roll*180/M_PI,
+                    filter_euler_angles.pitch*180/M_PI,
+                    filter_euler_angles.yaw*180/M_PI
                 );
                 MICROSTRAIN_LOG_INFO(
                     "%s = %10.3f%36s = [%9.6f, %9.6f, %9.6f]\n",
                     "TOW",
                     filter_gps_timestamp.tow,
                     "Filter Euler Angles Uncertainty",
-                    filter_euler_angles_uncertainty.roll,
-                    filter_euler_angles_uncertainty.pitch,
-                    filter_euler_angles_uncertainty.yaw
+                    filter_euler_angles_uncertainty.roll*180/M_PI,
+                    filter_euler_angles_uncertainty.pitch*180/M_PI,
+                    filter_euler_angles_uncertainty.yaw*180/M_PI
                 );
             }
 
