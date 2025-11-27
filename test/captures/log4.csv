@@ -1,0 +1,9 @@
+timestamp;log;tow;roll;pitch;yaw
+1764253271.3552294;INFO : Initializing the connection.;;;;
+1764253271.3553238;INFO : Connecting to the device on port /dev/ttyUSB0 with 115200 baudrate.;;;;
+1764253272.844804;INFO : Initializing the device interface.;;;;
+1764253272.8455977;INFO : Pinging the device.;;;;
+1764253274.8451385;ERROR: Could not ping the device!;;;;
+1764253274.8452177;ERROR: Command Result: (-4) Timed out.;;;;
+1764253274.8452346;INFO : Closing the connection.;;;;
+1764253274.8523495;INFO : Press 'Enter' to exit the program.;;;;

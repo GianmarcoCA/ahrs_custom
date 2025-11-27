@@ -1,0 +1,53 @@
+timestamp;log;tow;roll;pitch;yaw
+1764257391.3125136;INFO : Initializing the connection.;;;;
+1764257391.3128538;INFO : Connecting to the device on port /dev/ttyUSB0 with 115200 baudrate.;;;;
+1764257391.371554;INFO : Initializing the device interface.;;;;
+1764257391.3717268;INFO : Pinging the device.;;;;
+1764257391.3828027;INFO : Setting the device to idle.;;;;
+1764257391.395374;INFO : Getting the device information.;;;;
+1764257391.4156735;INFO : -------- Device Information --------;;;;
+1764257391.416863;INFO : Name             |      3DMCV7-AHRS;;;;
+1764257391.4187317;INFO : Model Number     |        6286-9960;;;;
+1764257391.4198377;INFO : Serial Number    |      6286.194785;;;;
+1764257391.4209113;INFO : Lot Number       |;;;;
+1764257391.4223158;INFO : Options          |  4-16g,250-1kdps;;;;
+1764257391.422967;INFO : Firmware Version |           1.2.05;;;;
+1764257391.4234083;INFO : ------------------------------------;;;;
+1764257391.4240162;INFO : Loading device default settings.;;;;
+1764257391.4264855;INFO : Initial command reply timeout is 2000ms.;;;;
+1764257391.426919;INFO : Increasing command reply timeout to 16000ms for capture gyro bias.;;;;
+1764257391.4272504;WARN : About to capture gyro bias for 15 seconds!;;;;
+1764257391.427613;WARN : Please do not move the device during this time!;;;;
+1764257404.1124465;WARN : Press 'Enter' when ready...WARN : Capturing gyro bias...;;;;
+1764257419.120858;INFO : Capture gyro bias completed with result: [0.000349, -0.000447, 0.000939];;;;
+1764257419.1211245;INFO : Reverting command reply timeout to 2000ms.;;;;
+1764257419.1211882;INFO : Getting the base rate for filter data.;;;;
+1764257419.1336787;INFO : Decimating filter base rate 1000 by 1000 to stream data at 1Hz.;;;;
+1764257419.1339152;INFO : Configuring message format for filter data.;;;;
+1764257419.1456964;INFO : Configuring a threshold event trigger for roll on trigger instance ID 1.;;;;
+1764257419.1583426;INFO : Configuring a threshold event trigger for pitch on trigger instance ID 2.;;;;
+1764257419.1707513;INFO : Configuring message action instance ID 1 for trigger instance ID 1 (roll).;;;;
+1764257419.1836298;INFO : Configuring message action instance ID 2 for trigger instance ID 2 (pitch).;;;;
+1764257419.1958568;INFO : Enabling event trigger instance ID 1 (roll).;;;;
+1764257419.2084064;INFO : Enabling event trigger instance ID 2 (pitch).;;;;
+1764257419.2211053;INFO : Configuring sensor-to-vehicle transformation.;;;;
+1764257419.2336133;INFO : Enabling the aiding measurement source for magnetometer.;;;;
+1764257419.2462204;INFO : Attempting to reset the navigation filter.;;;;
+1764257419.258705;INFO : Registering filter data callbacks.;;;;
+1764257419.2591715;INFO : Resuming the device.;;;;
+1764257419.2711825;INFO : The device is configured... waiting for the filter to enter AHRS mode.;;;;
+1764257421.2744672;INFO : The filter has entered AHRS mode. (3) MIP_FILTER_MODE_AHRS;;;;
+1764257421.276403;INFO : This example will now output data for 10s.;;;;
+1764257421.2847543;INFO : TOW =   3094.260    Euler Angles = [-0.002542,  0.004415,  0.871709];3094.26;-0.002542;0.004415;0.871709
+1764257422.2857423;INFO : TOW =   3095.260    Euler Angles = [-0.002608,  0.004348,  0.871615];3095.26;-0.002608;0.004348;0.871615
+1764257423.2875135;INFO : TOW =   3096.260    Euler Angles = [-0.002588,  0.004401,  0.871608];3096.26;-0.002588;0.004401;0.871608
+1764257424.2862542;INFO : TOW =   3097.260    Euler Angles = [-0.002552,  0.004435,  0.871583];3097.26;-0.002552;0.004435;0.871583
+1764257425.2967882;INFO : TOW =   3098.260    Euler Angles = [-0.002490,  0.004412,  0.871563];3098.26;-0.00249;0.004412;0.871563
+1764257426.297352;INFO : TOW =   3099.260    Euler Angles = [-0.002410,  0.004318,  0.871585];3099.26;-0.00241;0.004318;0.871585
+1764257427.307316;INFO : TOW =   3100.260    Euler Angles = [-0.002370,  0.004234,  0.871630];3100.26;-0.00237;0.004234;0.87163
+1764257428.309431;INFO : TOW =   3101.260    Euler Angles = [-0.002381,  0.004292,  0.871613];3101.26;-0.002381;0.004292;0.871613
+1764257429.3189588;INFO : TOW =   3102.260    Euler Angles = [-0.002422,  0.004320,  0.871555];3102.26;-0.002422;0.00432;0.871555
+1764257430.3206391;INFO : TOW =   3103.260    Euler Angles = [-0.002309,  0.004335,  0.871459];3103.26;-0.002309;0.004335;0.871459
+1764257431.275601;INFO : Example Completed Successfully.;;;;
+1764257431.2767134;INFO : Closing the connection.;;;;
+1764257431.2851691;INFO : Press 'Enter' to exit the program.;;;;
