@@ -75,7 +75,7 @@ void sched_yield();
 #ifdef _WIN32
 static const char* PORT_NAME = "COM1";
 #else  // Unix
-static const char* PORT_NAME = "/dev/ttyACM0";
+static const char* PORT_NAME = "/dev/ttyUSB0";
 #endif // _WIN32
 
 /// @brief  Set the baudrate for the connection (Serial/USB)
@@ -83,9 +83,15 @@ static const char* PORT_NAME = "/dev/ttyACM0";
 /// Use mip_base_*_comm_speed() to write and save the baudrate on the device
 static const uint32_t BAUDRATE = 115200;
 
-// TODO: Update to the desired streaming rate. Setting low for readability purposes
+// TODO: Update to the desired streaming rate.
 /// @brief Streaming rate in Hz
-static const uint16_t SAMPLE_RATE_HZ = 1;
+static const uint16_t SAMPLE_RATE_HZ = 100;
+
+/// @brief Number of samples buffered before output
+#define SAMPLE_BUFFER_SIZE 10u
+
+/// @brief Maximum time between sample buffer output operations
+static const mip_timeout SAMPLE_PRINT_PERIOD_MS = 100;
 
 // TODO: Update to change the example run time
 /// @brief Example run time
@@ -122,6 +128,22 @@ static void configure_sensor_message_format(mip_interface* _device);
 
 // Packet callback handler
 static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
+
+typedef struct accel_sample
+{
+    mip_timestamp timestamp;
+    float         accel[3];
+} accel_sample_t;
+
+typedef struct accel_sample_buffer
+{
+    accel_sample_t samples[SAMPLE_BUFFER_SIZE];
+    size_t         count;
+    mip_timestamp  last_flush_time;
+    FILE*          output_file;
+} accel_sample_buffer_t;
+
+static void flush_accel_sample_buffer(accel_sample_buffer_t* _buffer);
 
 #if USE_THREADS
 // Basic structure for thread data
@@ -202,6 +224,17 @@ int main(const int argc, const char* argv[])
     // Configure the message format for sensor data
     configure_sensor_message_format(&device);
 
+    accel_sample_buffer_t sample_buffer = {0};
+    sample_buffer.output_file           = fopen("sensor_accel_samples.csv", "w");
+    if (sample_buffer.output_file != NULL)
+    {
+        fprintf(sample_buffer.output_file, "timestamp_ms,accel_x_g,accel_y_g,accel_z_g\n");
+    }
+    else
+    {
+        MICROSTRAIN_LOG_WARN("Could not open sensor_accel_samples.csv. Samples will only be printed.\n");
+    }
+
     // Sensor data packet callback
     MICROSTRAIN_LOG_INFO("Registering a sensor data packet callback.\n");
 
@@ -214,7 +247,7 @@ int main(const int argc, const char* argv[])
         MIP_SENSOR_DATA_DESC_SET, // Data descriptor set
         false,                    // Process after field callback
         &packet_callback,         // Callback
-        NULL                      // User data
+        &sample_buffer            // User data
     );
 
 #if USE_THREADS
@@ -277,6 +310,12 @@ int main(const int argc, const char* argv[])
     pthread_mutex_destroy(&lock);
     free(thread_return_code);
 #endif // USE_THREADS
+
+    flush_accel_sample_buffer(&sample_buffer);
+    if (sample_buffer.output_file != NULL)
+    {
+        fclose(sample_buffer.output_file);
+    }
 
     terminate(&device_port, "Example Completed Successfully.\n", true);
 
@@ -615,54 +654,116 @@ static void configure_sensor_message_format(mip_interface* _device)
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief Callback function that processes received MIP packets
 ///
-/// @details This function is called whenever a MIP packet is received from the
-///          device.
-///          It processes the packet by:
-///          1. Extracting all fields from the packet
-///          2. Building a formatted string of field descriptors
-///          3. Logging packet information including timestamp, descriptor set,
-///             and field descriptors
+/// @details Flushes buffered accelerometer samples to stdout and the optional
+///          CSV file.
 ///
-/// @param _user Pointer to user data (unused in this implementation)
+/// @param _buffer Sample buffer to flush
+///
+static void flush_accel_sample_buffer(accel_sample_buffer_t* _buffer)
+{
+    if (_buffer == NULL || _buffer->count == 0)
+    {
+        return;
+    }
+
+    MICROSTRAIN_LOG_INFO("Flushing %zu accel samples:\n", _buffer->count);
+
+    for (size_t i = 0; i < _buffer->count; ++i)
+    {
+        const accel_sample_t* sample = &_buffer->samples[i];
+
+        MICROSTRAIN_LOG_INFO(
+            "  %" PRIu64 ", [%9.6f, %9.6f, %9.6f] g\n",
+            sample->timestamp,
+            sample->accel[0],
+            sample->accel[1],
+            sample->accel[2]
+        );
+
+        if (_buffer->output_file != NULL)
+        {
+            fprintf(
+                _buffer->output_file,
+                "%" PRIu64 ",%.9f,%.9f,%.9f\n",
+                sample->timestamp,
+                sample->accel[0],
+                sample->accel[1],
+                sample->accel[2]
+            );
+        }
+    }
+
+    if (_buffer->output_file != NULL)
+    {
+        fflush(_buffer->output_file);
+    }
+
+    _buffer->last_flush_time = _buffer->samples[_buffer->count - 1].timestamp;
+    _buffer->count           = 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief Flushes buffered accelerometer samples
+///
+/// @details Extracts scaled accelerometer data from sensor packets and buffers
+///          10 samples before printing/saving, or flushes partial buffers when
+///          100 ms have elapsed.
+///
+/// @param _user Pointer to accel_sample_buffer_t user data
 /// @param _packet_view Pointer to the received MIP packet
 /// @param _timestamp Timestamp when the packet was received
 ///
 static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
 {
-    // Unused parameter
-    (void)_user;
+    accel_sample_buffer_t* sample_buffer = (accel_sample_buffer_t*)_user;
+    if (sample_buffer == NULL)
+    {
+        return;
+    }
 
-    // Create a buffer for printing purposes
-    char field_descriptors_buffer[255] = {0};
-    int  buffer_offset                 = 0;
+    mip_sensor_scaled_accel_data scaled_accel_data;
+    bool                         has_accel = false;
 
     // Field object for iterating the packet and extracting each field
     mip_field_view field_view;
     mip_field_init_empty(&field_view);
 
-    // Iterate the packet and extract each field
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
-        buffer_offset += snprintf(
-            &field_descriptors_buffer[buffer_offset],
-            sizeof(field_descriptors_buffer) / sizeof(field_descriptors_buffer[0]) - buffer_offset,
-            " 0x%02X,",
-            mip_field_field_descriptor(&field_view)
-        );
+        if (mip_field_field_descriptor(&field_view) == MIP_DATA_DESC_SENSOR_ACCEL_SCALED)
+        {
+            has_accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &scaled_accel_data);
+            break;
+        }
     }
 
-    // Trim off the last comma
-    if (buffer_offset > 0)
+    if (!has_accel)
     {
-        field_descriptors_buffer[buffer_offset - 1] = '\0';
+        return;
     }
 
-    MICROSTRAIN_LOG_INFO(
-        "Received a packet at %" PRIu64 " with descriptor set 0x%02X:%s\n",
-        _timestamp,
-        mip_packet_descriptor_set(_packet_view),
-        field_descriptors_buffer
-    );
+    if (sample_buffer->count < SAMPLE_BUFFER_SIZE)
+    {
+        accel_sample_t* sample = &sample_buffer->samples[sample_buffer->count++];
+        sample->timestamp      = _timestamp;
+        sample->accel[0]       = scaled_accel_data.scaled_accel[0];
+        sample->accel[1]       = scaled_accel_data.scaled_accel[1];
+        sample->accel[2]       = scaled_accel_data.scaled_accel[2];
+    }
+
+    if (sample_buffer->last_flush_time == 0)
+    {
+        sample_buffer->last_flush_time = _timestamp;
+    }
+
+    if (
+        sample_buffer->count >= SAMPLE_BUFFER_SIZE ||
+        (_timestamp >= sample_buffer->last_flush_time &&
+         _timestamp - sample_buffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
+    )
+    {
+        flush_accel_sample_buffer(sample_buffer);
+    }
 }
 
 #if USE_THREADS
