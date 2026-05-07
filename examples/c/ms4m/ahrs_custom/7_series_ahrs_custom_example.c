@@ -154,6 +154,7 @@ mip_filter_comp_angular_rate_data           filter_angular_rate         = {0};
 mip_filter_attitude_quaternion_data         filter_quaternion           = {0};
 mip_filter_gravity_vector_data              filter_gravity              = {0};
 
+
 /*********************************************************************
  * TYPEDEF ENUMS
  */
@@ -179,9 +180,40 @@ typedef struct {
     FILE *csv3;
 } CsvFiles;
 
+#define SAMPLE_BUFFER_SIZE 100
+
+typedef struct
+{
+    mip_timestamp timestamp;
+    mip_shared_gps_timestamp_data        s_gpsTs;
+    mip_sensor_scaled_accel_data         s_accel;
+    mip_sensor_delta_velocity_data       s_deltaV;
+    mip_sensor_comp_quaternion_data      s_q;
+    mip_shared_reference_timestamp_data  s_inTime;
+    mip_shared_gps_timestamp_data               f_gpsTs;
+    mip_filter_status_data                      f_status;
+    mip_filter_comp_angular_rate_data           f_angRate;
+    mip_filter_linear_accel_data                f_accel;
+    mip_filter_attitude_quaternion_data         f_q;
+    mip_filter_gravity_vector_data              f_gravity;
+} sample_t;
+
+
+typedef struct sample_buffer
+{
+    sample_t samples[SAMPLE_BUFFER_SIZE];
+    size_t         count;
+    mip_timestamp  last_flush_time;
+    CsvFiles output_files;
+} sample_buffer_t;
+
 /*********************************************************************
  * PUBLIC FUNCTIONS
  */
+static void flush_sample_buffer(sample_buffer_t* _buffer);
+
+// Packet callback handler
+static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
 
 uint64_t get_unix_time_ns(void); 
 
@@ -1878,4 +1910,175 @@ char* find_device(const char* keyword) {
 
     closedir(dir);
     return NULL;
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief Callback function that processes received MIP packets
+///
+/// @details Flushes buffered accelerometer samples to stdout and the optional
+///          CSV file.
+///
+/// @param _buffer Sample buffer to flush
+///
+static void flush_sample_buffer(sample_buffer_t* _buffer)
+{
+    if (_buffer == NULL || _buffer->count == 0)
+    {
+        return;
+    }
+
+    MICROSTRAIN_LOG_INFO("Flushing %zu accel samples:\n", _buffer->count);
+
+    for (size_t i = 0; i < _buffer->count; ++i)
+    {
+        const sample_t* s = &_buffer->samples[i];
+
+        fprintf(_buffer->output_files.csv1,
+            "%" PRIu64 "," 
+            "%10.3f,%10.3f,"                               
+            "%9.6f,%9.6f,%9.6f,"
+            "%9.6f,%9.6f,%9.6f,"
+            "%9.6f,%9.6f,%9.6f,%u,"
+            "%9.6f,%9.6f,%9.6f,%u,"
+            "%9.6f,%9.6f,%9.6f,%u,\n",                                                        
+            s->timestamp,
+            s->s_gpsTs.tow,
+            s->f_gpsTs.tow,                                                                                            
+            s->s_accel.scaled_accel[0], s->s_accel.scaled_accel[1], s->s_accel.scaled_accel[2], 
+            s->s_deltaV.delta_velocity[0], s->s_deltaV.delta_velocity[1], s->s_deltaV.delta_velocity[2],
+            s->f_accel.accel[0], s->f_accel.accel[1], s->f_accel.accel[2], s->f_accel.valid_flags,
+            s->f_angRate.gyro[0], s->f_angRate.gyro[1], s->f_angRate.gyro[2], s->f_angRate.valid_flags, 
+            s->f_gravity.gravity[0], s->f_gravity.gravity[1], s->f_gravity.gravity[2], s->f_gravity.valid_flags
+        );
+
+        fprintf(   _buffer->output_files.csv2,
+            "%" PRIu64 ","                              
+            "%10.3f,"                             
+            "%9.6f,%9.6f,%9.6f,%9.6f\n",                                                         
+            s->timestamp, 
+            s->s_gpsTs.tow,                                                                                        
+            s->s_q.q[0], s->s_q.q[1], s->s_q.q[2], s->s_q.q[3]               
+        );
+
+        fprintf(   _buffer->output_files.csv3,
+            "%" PRIu64 ","     
+            "%10.3f,"                          
+            "%9.6f,%9.6f,%9.6f,%9.6f,%u\n",                                                          
+            s->timestamp,    
+            s->f_gpsTs.tow,                                                                                         
+            s->f_q.q[0], s->f_q.q[1], s->f_q.q[2], s->f_q.q[3], s->f_q.valid_flags
+        );
+
+        
+    }
+
+    if (_buffer->output_files.csv1 != NULL)
+    {
+        fflush(_buffer->output_files.csv1);
+    }
+    if (_buffer->output_files.csv2 != NULL)
+    {
+        fflush(_buffer->output_files.csv2);
+    }
+    if (_buffer->output_files.csv3 != NULL)
+    {
+        fflush(_buffer->output_files.csv3);
+    }
+
+    _buffer->last_flush_time = _buffer->samples[_buffer->count - 1].timestamp;
+    _buffer->count           = 0;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief Flushes buffered accelerometer samples
+///
+/// @details Extracts scaled accelerometer data from sensor packets and buffers
+///          10 samples before printing/saving, or flushes partial buffers when
+///          100 ms have elapsed.
+///
+/// @param _user Pointer to accel_sample_buffer_t user data
+/// @param _packet_view Pointer to the received MIP packet
+/// @param _timestamp Timestamp when the packet was received
+///
+static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
+{
+    sample_buffer_t* sB = (sample_buffer_t*)_user;
+
+    if (sB == NULL)
+    {
+        return;
+    }
+
+
+
+    // Field object for iterating the packet and extracting each field
+    mip_field_view field_view;
+    mip_field_init_empty(&field_view);
+
+    
+
+    while (mip_field_next_in_packet(&field_view, _packet_view))
+    {
+
+        switch( mip_field_descriptor(&field_view) ){
+
+            case MIP_DATA_DESC_SHARED_GPS_TIME:
+                extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensor_gps_timestamp);
+                break;
+
+            case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
+                has_accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensor_accel_scaled);
+                break;
+
+            case MIP_DATA_DESC_SENSOR_DELTA_VELOCITY:
+                extract_mip_sensor_delta_velocity_data_from_field(&field_view, &sensor_delta_velocity);
+                break;
+
+             case MIP_DATA_DESC_SENSOR_COMP_QUATERNION:
+                extract_mip_sensor_comp_quaternion_data_from_field(&field_view, &sensor_quaternion);
+                break;
+
+             case MIP_DATA_DESC_SHARED_REFERENCE_TIME:
+                extract_mip_shared_reference_timestamp_data_from_field(&field_view, &sensor_inTime);
+                break;
+
+             default:
+                break;
+        }
+
+    }
+
+
+
+
+    if (!has_accel)
+    {
+        return;
+    }
+
+    if (sample_buffer->count < SAMPLE_BUFFER_SIZE)
+    {
+        accel_sample_t* sample = &sample_buffer->samples[sample_buffer->count++];
+        sample->timestamp      = _timestamp;
+        sample->accel[0]       = scaled_accel_data.scaled_accel[0];
+        sample->accel[1]       = scaled_accel_data.scaled_accel[1];
+        sample->accel[2]       = scaled_accel_data.scaled_accel[2];
+    }
+
+    if (sample_buffer->last_flush_time == 0)
+    {
+        sample_buffer->last_flush_time = _timestamp;
+    }
+
+    if (
+        sample_buffer->count >= SAMPLE_BUFFER_SIZE ||
+        (_timestamp >= sample_buffer->last_flush_time &&
+         _timestamp - sample_buffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
+    )
+    {
+        flush_accel_sample_buffer(sample_buffer);
+    }
 }
