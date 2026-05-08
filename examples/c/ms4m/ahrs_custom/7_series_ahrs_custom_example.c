@@ -84,6 +84,10 @@
 
 #define SC_CONFIG  0 // Set this option to configure the device with the settings used for the SensorConnect application.
 
+
+/// @brief Maximum time between sample buffer output operations
+static const mip_timeout SAMPLE_PRINT_PERIOD_MS = 100;
+
 /*********************************************************************
  * CONSTANTS
  */
@@ -182,30 +186,63 @@ typedef struct {
 
 #define SAMPLE_BUFFER_SIZE 100
 
-typedef struct
-{
+
+typedef struct {
+    mip_shared_gps_timestamp_data        gpsTs;
+    mip_sensor_scaled_accel_data         accel;
+    mip_sensor_delta_velocity_data       deltaV;
+    mip_sensor_comp_quaternion_data      q;
+    mip_shared_reference_timestamp_data  inTime;
+} sensorData_t;
+
+typedef struct{
+    mip_shared_gps_timestamp_data               gpsTs;
+    mip_filter_status_data                      status;
+    mip_filter_comp_angular_rate_data           ang;
+    mip_filter_linear_accel_data                accel;
+    mip_filter_attitude_quaternion_data         q;
+    mip_filter_gravity_vector_data              g;
+} filterData_t;
+
+typedef struct {
     mip_timestamp timestamp;
-    mip_shared_gps_timestamp_data        s_gpsTs;
-    mip_sensor_scaled_accel_data         s_accel;
-    mip_sensor_delta_velocity_data       s_deltaV;
-    mip_sensor_comp_quaternion_data      s_q;
-    mip_shared_reference_timestamp_data  s_inTime;
-    mip_shared_gps_timestamp_data               f_gpsTs;
-    mip_filter_status_data                      f_status;
-    mip_filter_comp_angular_rate_data           f_angRate;
-    mip_filter_linear_accel_data                f_accel;
-    mip_filter_attitude_quaternion_data         f_q;
-    mip_filter_gravity_vector_data              f_gravity;
+    filterData_t filterData;
+    sensorData_t sensorData;
 } sample_t;
 
-
-typedef struct sample_buffer
-{
-    sample_t samples[SAMPLE_BUFFER_SIZE];
+typedef struct sample_buffer{
+    sample_t sample[SAMPLE_BUFFER_SIZE];
     size_t         count;
     mip_timestamp  last_flush_time;
     CsvFiles output_files;
 } sample_buffer_t;
+
+
+typedef union {
+    uint8_t value;      // Acceso al dato completo (16 bits)
+    struct {
+        uint8_t gpsTs  : 1;
+        uint8_t accel  : 1;
+        uint8_t deltaV : 1;
+        uint8_t q      : 1;
+        uint8_t inTime : 1;
+        // ... puedes nombrar hasta el bit15
+    } bits;
+} sensorR_t;
+
+
+typedef union {
+    uint8_t value;      // Acceso al dato completo (16 bits)
+    struct {
+        uint8_t gpsTs   : 1;
+        uint8_t status  : 1;
+        uint8_t ang     : 1;
+        uint8_t accel   : 1;
+        uint8_t q       : 1;
+        uint8_t g       : 1;
+        // ... puedes nombrar hasta el bit15
+    } bits;
+} filterR_t;
 
 /*********************************************************************
  * PUBLIC FUNCTIONS
@@ -1042,222 +1079,7 @@ static void configure_filter_message_format(mip_interface* _device)
 
 #endif
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Configures threshold event triggers for roll and pitch angles
-///
-/// @details Sets up two event triggers for monitoring Euler angles:
-///          1. Roll angle threshold (Trigger ID 1)
-///             - Monitors X-axis rotation
-///             - Triggers when the angle exceeds +/-45 degrees
-///          2. Pitch angle threshold (Trigger ID 2)
-///             - Monitors Y-axis rotation
-///             - Triggers when the angle exceeds +/-45 degrees
-///
-/// @param _device Pointer to the initialized MIP device interface
-///
-///
-// static void configure_event_triggers(mip_interface* _device)
-// {
-//     // Configure a threshold trigger
-//     mip_3dm_event_trigger_command_parameters event_parameters;
-//     event_parameters.threshold.desc_set   = MIP_FILTER_DATA_DESC_SET;
-//     event_parameters.threshold.field_desc = MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES;
 
-//     // X-axis (roll)
-//     event_parameters.threshold.param_id = 1;
-
-//     // Configure the threshold as a trigger window
-//     event_parameters.threshold.type = MIP_3DM_EVENT_TRIGGER_COMMAND_THRESHOLD_PARAMS_TYPE_WINDOW;
-
-//     // Configure the high and low thresholds for the trigger window
-//     // Note: The command expects radians for these values
-//     event_parameters.threshold.low_thres  = 45.0 * M_PI / 180.0;                   // 45 degrees
-//     event_parameters.threshold.high_thres = -event_parameters.threshold.low_thres; // -45 degrees
-
-//     // Note: This is independent of the param_id
-//     uint8_t trigger_instance_id = 1;
-
-//     MICROSTRAIN_LOG_INFO("Configuring a threshold event trigger for roll on trigger instance ID %d.\n", trigger_instance_id);
-//     mip_cmd_result cmd_result = mip_3dm_write_event_trigger(
-//         _device,
-//         trigger_instance_id,
-//         MIP_3DM_EVENT_TRIGGER_COMMAND_TYPE_THRESHOLD, // Trigger type
-//         &event_parameters                             // Trigger parameters to set
-//     );
-
-//     if (!mip_cmd_result_is_ack(cmd_result))
-//     {
-//         exit_from_command(_device, cmd_result, "Could not configure a threshold event trigger for roll!\n");
-//     }
-
-//     // Use the same trigger configuration, but set it to the y-axis (pitch)
-//     event_parameters.threshold.param_id = 2;
-
-//     // Note: This is independent of the param_id
-//     trigger_instance_id = 2;
-
-//     MICROSTRAIN_LOG_INFO("Configuring a threshold event trigger for pitch on trigger instance ID %d.\n", trigger_instance_id);
-//     cmd_result = mip_3dm_write_event_trigger(
-//         _device,
-//         trigger_instance_id,
-//         MIP_3DM_EVENT_TRIGGER_COMMAND_TYPE_THRESHOLD, // Trigger type
-//         &event_parameters                             // Trigger parameters to set
-//     );
-
-//     if (!mip_cmd_result_is_ack(cmd_result))
-//     {
-//         exit_from_command(_device, cmd_result, "Could not configure a threshold event trigger for pitch!\n");
-//     }
-// }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Configures event actions to occur when triggers are activated
-///
-/// @details Sets up message actions for each event trigger:
-///          - Links action instance 1 to trigger instance 1 (roll)
-///          - Links action instance 2 to trigger instance 2 (pitch)
-///          - Configures both to output event source data when triggered
-///
-/// @param _device Pointer to the initialized MIP device interface
-///
-///
-// static void configure_event_actions(mip_interface* _device)
-// {
-//     mip_3dm_event_action_command_parameters event_action_parameters;
-//     event_action_parameters.message.desc_set       = MIP_FILTER_DATA_DESC_SET;
-//     event_action_parameters.message.decimation     = 0;
-//     event_action_parameters.message.num_fields     = 1;
-//     event_action_parameters.message.descriptors[0] = MIP_DATA_DESC_SHARED_EVENT_SOURCE;
-
-//     // Note: These are independent of each other and do not need to be the same
-//     // The tigger instance ID should match the configured trigger instance ID the action should be tied to
-//     uint8_t action_instance_id  = 1;
-//     uint8_t trigger_instance_id = 1;
-
-//     MICROSTRAIN_LOG_INFO(
-//         "Configuring message action instance ID %d for trigger instance ID %d (roll).\n",
-//         action_instance_id,
-//         trigger_instance_id
-//     );
-//     // Configure an action for event trigger 1 (roll)
-//     mip_cmd_result cmd_result = mip_3dm_write_event_action(
-//         _device,
-//         action_instance_id,
-//         trigger_instance_id,                       // Trigger instance ID to link to
-//         MIP_3DM_EVENT_ACTION_COMMAND_TYPE_MESSAGE, // Action type
-//         &event_action_parameters                   // Action parameters to set
-//     );
-
-//     if (!mip_cmd_result_is_ack(cmd_result))
-//     {
-//         exit_from_command(_device, cmd_result, "Could not configure a message action for the roll event trigger!\n");
-//     }
-
-//     // Note: These are independent of each other and do not need to be the same
-//     // The tigger instance ID should match the configured trigger instance ID the action should be tied to
-//     action_instance_id  = 2;
-//     trigger_instance_id = 2;
-
-//     MICROSTRAIN_LOG_INFO(
-//         "Configuring message action instance ID %d for trigger instance ID %d (pitch).\n",
-//         action_instance_id,
-//         trigger_instance_id
-//     );
-//     // Configure an action for event trigger 2 (pitch)
-//     cmd_result = mip_3dm_write_event_action(
-//         _device,
-//         action_instance_id,
-//         trigger_instance_id,                       // Trigger instance ID to link to
-//         MIP_3DM_EVENT_ACTION_COMMAND_TYPE_MESSAGE, // Action type
-//         &event_action_parameters                   // Action parameters to set
-//     );
-
-//     if (!mip_cmd_result_is_ack(cmd_result))
-//     {
-//         exit_from_command(_device, cmd_result, "Could not configure a message action for the pitch event trigger!\n");
-//     }
-// }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Enables the configured event triggers
-///
-/// @details Activates both event triggers:
-///          1. Enables roll threshold monitoring (Trigger ID 1)
-///          2. Enables pitch threshold monitoring (Trigger ID 2)
-///
-/// @param _device Pointer to the initialized MIP device interface
-///
-///
-// static void enable_events(mip_interface* _device)
-// {
-//     uint8_t event_trigger_instance_id = 1;
-
-//     // Enable the roll event trigger
-//     MICROSTRAIN_LOG_INFO("Enabling event trigger instance ID %d (roll).\n", event_trigger_instance_id);
-//     mip_cmd_result cmd_result = mip_3dm_write_event_control(
-//         _device,
-//         event_trigger_instance_id,                 // Event trigger instance ID to enable
-//         MIP_3DM_EVENT_CONTROL_COMMAND_MODE_ENABLED // Event control mode
-//     );
-
-//     if (!mip_cmd_result_is_ack(cmd_result))
-//     {
-//         exit_from_command(_device, cmd_result, "Could not enable event trigger for roll!\n");
-//     }
-
-//     event_trigger_instance_id = 2;
-
-//     // Enable the pitch event trigger
-//     MICROSTRAIN_LOG_INFO("Enabling event trigger instance ID %d (pitch).\n", event_trigger_instance_id);
-//     cmd_result = mip_3dm_write_event_control(
-//         _device,
-//         event_trigger_instance_id,                 // Event trigger instance ID to enable
-//         MIP_3DM_EVENT_CONTROL_COMMAND_MODE_ENABLED // Event control mode
-//     );
-
-//     if (!mip_cmd_result_is_ack(cmd_result))
-//     {
-//         exit_from_command(_device, cmd_result, "Could not enable event trigger for pitch!\n");
-//     }
-// }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Event handler for filter data source triggers
-///
-/// @details Processes event trigger notifications for:
-///          - Roll threshold events (Trigger ID 1)
-///          - Pitch threshold events (Trigger ID 2)
-///          Outputs appropriate warning messages when thresholds are exceeded.
-///
-/// @param _user User data pointer (unused)
-/// @param _field Pointer to the MIP field containing event data
-/// @param _timestamp Timestamp of when the event occurred (unused)
-///
-///
-// static void handle_event_triggers(void* _user, const mip_field_view* _field, mip_timestamp _timestamp)
-// {
-//     // Unused parameters
-//     (void)_user;
-//     (void)_timestamp;
-
-//     mip_shared_event_source_data event_source;
-
-//     if (!extract_mip_shared_event_source_data_from_field(_field, &event_source))
-//     {
-//         return;
-//     }
-
-//     // Event trigger instance ID 1 (roll)
-//     if (event_source.trigger_id == 1)
-//     {
-//         MICROSTRAIN_LOG_WARN("Roll event triggered! Trigger ID: %d.\n", event_source.trigger_id);
-//     }
-//     // Event trigger instance ID 2 (pitch)
-//     else if (event_source.trigger_id == 2)
-//     {
-//         MICROSTRAIN_LOG_WARN("Pitch event triggered! Trigger ID: %d.\n", event_source.trigger_id);
-//     }
-// }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief Initializes and resets the navigation filter
@@ -1992,57 +1814,44 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
 }
 
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Flushes buffered accelerometer samples
-///
-/// @details Extracts scaled accelerometer data from sensor packets and buffers
-///          10 samples before printing/saving, or flushes partial buffers when
-///          100 ms have elapsed.
-///
-/// @param _user Pointer to accel_sample_buffer_t user data
-/// @param _packet_view Pointer to the received MIP packet
-/// @param _timestamp Timestamp when the packet was received
-///
-static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
+static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
 {
-    sample_buffer_t* sB = (sample_buffer_t*)_user;
+    sample_buffer_t* sampleBuffer = (sample_buffer_t*)_user;
 
-    if (sB == NULL)
-    {
-        return;
-    }
-
-
+    if (sampleBuffer == NULL) return;
 
     // Field object for iterating the packet and extracting each field
     mip_field_view field_view;
     mip_field_init_empty(&field_view);
 
-    
+
+    sensorData_t sensorData = {0};
+    sensorR_t sensor = {0};
 
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
+        if(sensor.value == 0b00011111) break; // If all data has been extracted, break the loop
 
         switch( mip_field_descriptor(&field_view) ){
 
             case MIP_DATA_DESC_SHARED_GPS_TIME:
-                extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensor_gps_timestamp);
+                if(sensor.bits.gpsTs == 0) sensor.bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData.gpsTs) ? 1 : 0;
                 break;
 
             case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
-                has_accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensor_accel_scaled);
+                if(sensor.bits.accel == 0) sensor.bits.accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensorData.accel) ? 1 : 0;
                 break;
 
             case MIP_DATA_DESC_SENSOR_DELTA_VELOCITY:
-                extract_mip_sensor_delta_velocity_data_from_field(&field_view, &sensor_delta_velocity);
+                if(sensor.bits.deltaV == 0) sensor.bits.deltaV = extract_mip_sensor_delta_velocity_data_from_field(&field_view, &sensorData.deltaV) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_SENSOR_COMP_QUATERNION:
-                extract_mip_sensor_comp_quaternion_data_from_field(&field_view, &sensor_quaternion);
+                if(sensor.bits.q == 0) sensor.bits.q = extract_mip_sensor_comp_quaternion_data_from_field(&field_view, &sensorData.q) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_SHARED_REFERENCE_TIME:
-                extract_mip_shared_reference_timestamp_data_from_field(&field_view, &sensor_inTime);
+                if(sensor.bits.inTime == 0) sensor.bits.inTime = extract_mip_shared_reference_timestamp_data_from_field(&field_view, &sensorData.inTime) ? 1 : 0;
                 break;
 
              default:
@@ -2051,34 +1860,30 @@ static void packet_callback(void* _user, const mip_packet_view* _packet_view, mi
 
     }
 
+    if(sensor.value == 0) sensor.value = 1;
 
-
-
-    if (!has_accel)
+    if (sampleBuffer->count < SAMPLE_BUFFER_SIZE)
     {
-        return;
+        sensorData_t* sampleSensor = &sampleBuffer->sample[sampleBuffer->count++].sensorData;
+
+        sampleSensor->gpsTs  = sensorData.gpsTs;
+        sampleSensor->accel  = sensorData.accel;
+        sampleSensor->deltaV = sensorData.deltaV;
+        sampleSensor->q      = sensorData.q;
+        sampleSensor->inTime = sensorData.inTime;
     }
 
-    if (sample_buffer->count < SAMPLE_BUFFER_SIZE)
+    if (sampleBuffer->last_flush_time == 0)
     {
-        accel_sample_t* sample = &sample_buffer->samples[sample_buffer->count++];
-        sample->timestamp      = _timestamp;
-        sample->accel[0]       = scaled_accel_data.scaled_accel[0];
-        sample->accel[1]       = scaled_accel_data.scaled_accel[1];
-        sample->accel[2]       = scaled_accel_data.scaled_accel[2];
-    }
-
-    if (sample_buffer->last_flush_time == 0)
-    {
-        sample_buffer->last_flush_time = _timestamp;
+        sampleBuffer->last_flush_time = _timestamp;
     }
 
     if (
-        sample_buffer->count >= SAMPLE_BUFFER_SIZE ||
-        (_timestamp >= sample_buffer->last_flush_time &&
-         _timestamp - sample_buffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
+        sampleBuffer->count >= SAMPLE_BUFFER_SIZE ||
+        (_timestamp >= sampleBuffer->last_flush_time &&
+         _timestamp - sampleBuffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
     )
     {
-        flush_accel_sample_buffer(sample_buffer);
+        flush_accel_sample_buffer(sampleBuffer);
     }
 }

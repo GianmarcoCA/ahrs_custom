@@ -55,17 +55,17 @@
 #ifdef _WIN32
 static const char* PORT_NAME = "COM1";
 #else  // Unix
-static const char* PORT_NAME = "/dev/ttyACM0";
+static const char* PORT_NAME = "/dev/ttyUSB0";
 #endif // _WIN32
 
 /// @brief  Set the baudrate for the connection (Serial/USB)
 /// @note For native serial connections this needs to be 115200 due to the device default settings command
 /// Use mip_base_*_comm_speed() to write and save the baudrate on the device
-static const uint32_t BAUDRATE = 115200;
+static const uint32_t BAUDRATE = 460800;
 
 // TODO: Update to the desired streaming rate. Setting low for readability purposes
 /// @brief Streaming rate in Hz
-static const uint16_t SAMPLE_RATE_HZ = 1;
+static const uint16_t SAMPLE_RATE_HZ = 100;
 
 // TODO: Update to change the example run time
 /// @brief Example run time
@@ -110,6 +110,18 @@ static void accel_field_callback(void* _user, const mip_field_view* _field_view,
 static void gyro_field_callback(void* _user, const mip_field_view* _field_view, mip_timestamp _timestamp);
 static void mag_field_callback(void* _user, const mip_field_view* _field_view, mip_timestamp _timestamp);
 
+// Archivo binario global para guardar datos
+static FILE* imu_bin_file = NULL;
+
+// Variables globales para guardar el último valor de gyro y mag
+static float last_accel[3] = {0};
+static float last_gyro[3] = {0};
+static float last_mag[3] = {0};
+static mip_timestamp last_timestamp = 0;
+static bool accel_ready = false;
+static bool gyro_ready = false;
+static bool mag_ready = false;
+
 // Utility functions the handle application closing and printing error messages
 static void terminate(serial_port* _device_port, const char* _message, const bool _successful);
 static void exit_from_command(const mip_interface* _device, const mip_cmd_result _cmd_result, const char* _format, ...);
@@ -131,6 +143,14 @@ int main(const int argc, const char* argv[])
     // If the parameter is higher than the max level, higher-level logging functions will be ignored
     MICROSTRAIN_LOG_INIT(&log_callback, MICROSTRAIN_LOG_LEVEL_INFO, NULL);
 
+
+    // Abrir archivo binario para guardar datos IMU
+    imu_bin_file = fopen("imu_data.bin", "wb");
+    if (!imu_bin_file) {
+        fprintf(stderr, "No se pudo abrir imu_data.bin para escritura.\n");
+        return 1;
+    }
+
     // Initialize the connection
     MICROSTRAIN_LOG_INFO("Initializing the connection.\n");
     serial_port device_port;
@@ -141,6 +161,7 @@ int main(const int argc, const char* argv[])
     // Open the connection to the device
     if (!serial_port_open(&device_port, PORT_NAME, BAUDRATE))
     {
+        if (imu_bin_file) fclose(imu_bin_file);
         terminate(&device_port, "Could not open the connection!\n", false);
     }
 
@@ -275,6 +296,10 @@ int main(const int argc, const char* argv[])
         );
     }
 
+
+    // Cerrar archivo binario al terminar
+    if (imu_bin_file) fclose(imu_bin_file);
+    imu_bin_file = NULL;
     terminate(&device_port, "Example Completed Successfully.\n", true);
 
     return 0;
@@ -525,6 +550,8 @@ static void initialize_device(mip_interface* _device, serial_port* _device_port,
 
         exit_from_command(_device, cmd_result, "Could not load device default settings!\n");
     }
+    mip_3dm_write_uart_baudrate(_device, 460800);
+    mip_3dm_save_uart_baudrate(_device);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -682,40 +709,10 @@ static void configure_sensor_message_format(
 ///
 static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
 {
-    // Unused parameter
+    // No imprimir nada, función vacía
     (void)_user;
-
-    // Create a buffer for printing purposes
-    char field_descriptors_buffer[255] = {0};
-    int  buffer_offset                 = 0;
-
-    // Field object for iterating the packet and extracting each field
-    mip_field_view field_view;
-    mip_field_init_empty(&field_view);
-
-    // Iterate the packet and extract each field
-    while (mip_field_next_in_packet(&field_view, _packet_view))
-    {
-        buffer_offset += snprintf(
-            &field_descriptors_buffer[buffer_offset],
-            sizeof(field_descriptors_buffer) / sizeof(field_descriptors_buffer[0]) - buffer_offset,
-            " 0x%02X,",
-            mip_field_field_descriptor(&field_view)
-        );
-    }
-
-    // Trim off the last comma
-    if (buffer_offset > 0)
-    {
-        field_descriptors_buffer[buffer_offset - 1] = '\0';
-    }
-
-    MICROSTRAIN_LOG_INFO(
-        "Received a packet at %" PRIu64 " with descriptor set 0x%02X:%s\n",
-        _timestamp,
-        mip_packet_descriptor_set(_packet_view),
-        field_descriptors_buffer
-    );
+    (void)_packet_view;
+    (void)_timestamp;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -732,23 +729,37 @@ static void packet_callback(void* _user, const mip_packet_view* _packet_view, mi
 ///
 static void accel_field_callback(void* _user, const mip_field_view* _field_view, mip_timestamp _timestamp)
 {
-    // Unused parameters
     (void)_user;
-    (void)_timestamp;
-
     mip_sensor_scaled_accel_data scaled_accel_data;
-
     if (extract_mip_sensor_scaled_accel_data_from_field(_field_view, &scaled_accel_data))
     {
-        MICROSTRAIN_LOG_INFO(
-            "%-17s (0x%02X, 0x%02X): [%9.6f, %9.6f, %9.6f]\n",
-            "Scaled Accel Data",
-            MIP_SENSOR_DATA_DESC_SET,          // Data descriptor set
-            MIP_DATA_DESC_SENSOR_ACCEL_SCALED, // Data field descriptor set
-            scaled_accel_data.scaled_accel[0], // X
-            scaled_accel_data.scaled_accel[1], // Y
-            scaled_accel_data.scaled_accel[2]  // Z
-        );
+        last_accel[0] = scaled_accel_data.scaled_accel[0];
+        last_accel[1] = scaled_accel_data.scaled_accel[1];
+        last_accel[2] = scaled_accel_data.scaled_accel[2];
+        last_timestamp = _timestamp;
+        accel_ready = true;
+        // Solo grabar si los tres están listos
+        if (accel_ready && gyro_ready && mag_ready && imu_bin_file) {
+            struct {
+                mip_timestamp timestamp;
+                float accel[3];
+                float gyro[3];
+                float mag[3];
+            } imu_row;
+            imu_row.timestamp = last_timestamp;
+            imu_row.accel[0] = last_accel[0];
+            imu_row.accel[1] = last_accel[1];
+            imu_row.accel[2] = last_accel[2];
+            imu_row.gyro[0] = last_gyro[0];
+            imu_row.gyro[1] = last_gyro[1];
+            imu_row.gyro[2] = last_gyro[2];
+            imu_row.mag[0] = last_mag[0];
+            imu_row.mag[1] = last_mag[1];
+            imu_row.mag[2] = last_mag[2];
+            fwrite(&imu_row, sizeof(imu_row), 1, imu_bin_file);
+            // Limpiar flags
+            accel_ready = gyro_ready = mag_ready = false;
+        }
     }
 }
 
@@ -766,23 +777,14 @@ static void accel_field_callback(void* _user, const mip_field_view* _field_view,
 ///
 static void gyro_field_callback(void* _user, const mip_field_view* _field_view, mip_timestamp _timestamp)
 {
-    // Unused parameters
     (void)_user;
-    (void)_timestamp;
-
     mip_sensor_scaled_gyro_data scaled_gyro_data;
-
     if (extract_mip_sensor_scaled_gyro_data_from_field(_field_view, &scaled_gyro_data))
     {
-        MICROSTRAIN_LOG_INFO(
-            "%-17s (0x%02X, 0x%02X): [%9.6f, %9.6f, %9.6f]\n",
-            "Scaled Gyro Data",
-            MIP_SENSOR_DATA_DESC_SET,         // Data descriptor set
-            MIP_DATA_DESC_SENSOR_GYRO_SCALED, // Data field descriptor set
-            scaled_gyro_data.scaled_gyro[0],  // X
-            scaled_gyro_data.scaled_gyro[1],  // Y
-            scaled_gyro_data.scaled_gyro[2]   // Z
-        );
+        last_gyro[0] = scaled_gyro_data.scaled_gyro[0];
+        last_gyro[1] = scaled_gyro_data.scaled_gyro[1];
+        last_gyro[2] = scaled_gyro_data.scaled_gyro[2];
+        gyro_ready = true;
     }
 }
 
@@ -800,23 +802,14 @@ static void gyro_field_callback(void* _user, const mip_field_view* _field_view, 
 ///
 static void mag_field_callback(void* _user, const mip_field_view* _field_view, mip_timestamp _timestamp)
 {
-    // Unused parameters
     (void)_user;
-    (void)_timestamp;
-
     mip_sensor_scaled_mag_data scaled_mag_data;
-
     if (extract_mip_sensor_scaled_mag_data_from_field(_field_view, &scaled_mag_data))
     {
-        MICROSTRAIN_LOG_INFO(
-            "%-17s (0x%02X, 0x%02X): [%9.6f, %9.6f, %9.6f]\n",
-            "Scaled Mag Data",
-            MIP_SENSOR_DATA_DESC_SET,        // Data descriptor set
-            MIP_DATA_DESC_SENSOR_MAG_SCALED, // Data field descriptor set
-            scaled_mag_data.scaled_mag[0],   // X
-            scaled_mag_data.scaled_mag[1],   // Y
-            scaled_mag_data.scaled_mag[2]    // Z
-        );
+        last_mag[0] = scaled_mag_data.scaled_mag[0];
+        last_mag[1] = scaled_mag_data.scaled_mag[1];
+        last_mag[2] = scaled_mag_data.scaled_mag[2];
+        mag_ready = true;
     }
 }
 
