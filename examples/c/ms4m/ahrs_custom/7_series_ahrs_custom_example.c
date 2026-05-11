@@ -51,13 +51,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <stdint.h>    
 #include <inttypes.h>
 
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <string.h>
 #include <dirent.h>
 #include <assert.h>
 
@@ -94,9 +92,6 @@ void sched_yield();
 #define MAGNETOMETER_FEATURE 0 // Set to 1 to include magnetometer data and AHRS mode, set to 0 to exclude magnetometer data and use vertical gyro mode
 
 #define MAX_FILENAME_LENGTH 150 // Buffer size for file name
-#define BUFFER0_SIZE 200 // Buffer size for SensorConnectData
-#define BUFFER1_SIZE 100 // Buffer size for QuaternionData
-#define BUFFER2_SIZE 100 // Buffer size for QuaternionEstData
 
 #define INDIVIDUAL_SCRIPT 1 // Set this option to enable individual script testing
 
@@ -111,19 +106,11 @@ void sched_yield();
 #define USE_THREADS true
 
 /// @brief Maximum time between sample buffer output operations
-static const mip_timeout SAMPLE_PRINT_PERIOD_MS = 100;
+static const mip_timeout SAMPLE_PRINT_PERIOD_MS = 50000;
 
 /*********************************************************************
  * CONSTANTS
  */
-
-// TODO: Update to the correct port name and baudrate
-/// @brief  Set the port name for the connection (Serial/USB)
-#ifdef _WIN32
-static const char* PORT_NAME = "COM1";
-#else  // Unix
-//static const char* PORT_NAME = "/dev/ttyUSB1";
-#endif // _WIN32
 
 /// @brief  Set the baudrate for the connection (Serial/USB)
 /// @note For native serial connections this needs to be 115200 due to the device default settings command
@@ -146,57 +133,14 @@ static uint16_t FILTER_DECIMATION = 0;  // 0 = use SAMPLE_RATE_HZ
 
 // TODO: Update to change the example run time
 /// @brief Example run time
-static const uint32_t RUN_TIME_SECONDS = 10*60*60;
+static const uint32_t RUN_TIME_SECONDS = 30;
 
 
 /*********************************************************************
  * GLOBAL VARIABLES
  */ 
-char buffer0[BUFFER0_SIZE]; // buffer for SensorConnectData
-
-char buffer1[BUFFER1_SIZE];  // buffer for QuaternionData
-
-char buffer2[BUFFER2_SIZE];  // buffer for QuaternionEstData
-
 int fileSetCounter = 1; // Contador global para los archivos
 
-static bool flagStop = false; 
-
-// Sensor Data
-mip_dispatch_handler sensor_data_handlers[5];
-
-//Device data stores
-mip_shared_gps_timestamp_data        sensor_gps_timestamp    = {0};
-mip_sensor_scaled_accel_data         sensor_accel_scaled     = {0};
-mip_sensor_delta_velocity_data       sensor_delta_velocity   = {0};
-mip_sensor_comp_quaternion_data      sensor_quaternion       = {0};
-mip_shared_reference_timestamp_data  sensor_inTime    = {0};
-
-
-mip_dispatch_handler filter_data_handlers[6];
-
-// Data stores for filter data
-mip_shared_gps_timestamp_data               filter_gps_timestamp        = {0};
-mip_filter_status_data                      filter_status               = {0};
-mip_filter_linear_accel_data                filter_linear_accel         = {0};
-mip_filter_comp_angular_rate_data           filter_angular_rate         = {0};
-mip_filter_attitude_quaternion_data         filter_quaternion           = {0};
-mip_filter_gravity_vector_data              filter_gravity              = {0};
-
-
-/*********************************************************************
- * TYPEDEF ENUMS
- */
-
-typedef enum rData_state
-{
-    START = 0,
-    RESET_FILTER,
-    CREATE_NEW_CVS,
-    FINISH,
-    START_UP,
-    MIP_IDLE,
-} rData_state;
 
 /*********************************************************************
  * TYPEDEF STRUCTS
@@ -206,13 +150,13 @@ typedef enum rData_state
 typedef struct {
     FILE *csv1;
     FILE *csv2;
-    FILE *csv3;
 } CsvFiles;
 
 #define SAMPLE_BUFFER_SIZE 100
 
 
 typedef struct {
+    mip_timestamp timestamp;
     mip_shared_gps_timestamp_data        gpsTs;
     mip_sensor_scaled_accel_data         accel;
     mip_sensor_delta_velocity_data       deltaV;
@@ -221,6 +165,7 @@ typedef struct {
 } sensorData_t;
 
 typedef struct{
+    mip_timestamp timestamp;
     mip_shared_gps_timestamp_data               gpsTs;
     mip_filter_status_data                      status;
     mip_filter_comp_angular_rate_data           ang;
@@ -257,20 +202,28 @@ typedef union {
 
 
 typedef struct {
-    mip_timestamp timestamp;
-    filterData_t filterData;
-    sensorData_t sensorData;
-    sensorR_t sensor_sync_flags;  // Synchronization flags for sensor data
-    filterR_t filter_sync_flags;  // Synchronization flags for filter data
-} sample_t;
 
-typedef struct sample_buffer{
-    sample_t sample[SAMPLE_BUFFER_SIZE];
-    size_t         count;
+    sensorData_t sample[SAMPLE_BUFFER_SIZE];
+    size_t count;
     mip_timestamp  last_flush_time;
-    CsvFiles output_files;
+    sensorData_t pending_sensorData;
+    sensorR_t    pending_sensor;
     pthread_mutex_t buffer_mutex;  // Mutex for thread-safe access
-} sample_buffer_t;
+    FILE* output_files;
+} sensor_buffer_t;
+
+typedef struct {
+
+    filterData_t sample[SAMPLE_BUFFER_SIZE];
+    size_t count;
+    mip_timestamp  last_flush_time;
+    filterData_t pending_filterData;
+    filterR_t    pending_filter;
+    pthread_mutex_t buffer_mutex;  // Mutex for thread-safe access
+    FILE* output_files;
+} filter_buffer_t;
+
+
 
 #if USE_THREADS
 // Basic structure for thread data
@@ -282,11 +235,11 @@ typedef struct thread_data
 #endif // USE_THREADS
 
 
-
 /*********************************************************************
  * PUBLIC FUNCTIONS
  */
-static void flush_sample_buffer(sample_buffer_t* _buffer);
+static void flush_sensor_buffer(sensor_buffer_t* _buffer);
+static void flush_filter_buffer(filter_buffer_t* _buffer);
 
 // Forward declarations
 static void log_callback(void* _user, const microstrain_log_level _level, const char* _format, va_list _args);
@@ -309,12 +262,6 @@ CsvFiles createCsvFiles(void);
 
 // Función para cerrar los archivos CSV
 void closeCsvFiles(CsvFiles files);
-
-// Función para escribir cadenas de texto formateadas en los archivos CSV
-void writeDataToCsv(CsvFiles files, const char *line1, const char *line2, const char *line3);
-
-// Función para guardar los datos en los archivos CSV creados
-void saveDataToCsv(CsvFiles files, uint64_t *unix_ns);
 
 // Función para encontrar el puerto del dispositivo basado en una palabra clave
 char* find_device(const char* keyword);
@@ -343,17 +290,8 @@ static void configure_filter_message_format(mip_interface* _device);
 
 #endif
 
-// Event configuration
-/* static void configure_event_triggers(mip_interface* _device);
-static void configure_event_actions(mip_interface* _device);
-static void enable_events(mip_interface* _device);
-static void handle_event_triggers(void* _user, const mip_field_view* _field, mip_timestamp _timestamp);
- */
 // Filter initialization
 static void initialize_filter(mip_interface* _device);
-
-// Utility to display filter state changes
-static void display_filter_state(const mip_filter_mode _filter_state);
 
 // Used for basic timestamping (since epoch in milliseconds)
 // TODO: Update this to whatever timestamping method is desired
@@ -379,6 +317,11 @@ int main(const int argc, const char* argv[])
 {
     // Note: This is a compile-time way of checking that the proper logging level is enabled
     // Note: The max available logging level may differ in pre-packaged installations of the MIP SDK
+    
+    // Mark printf operations as unbuffered to flush with every operation
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    
     #ifndef MICROSTRAIN_LOGGING_ENABLED_INFO
     #error This example requires a logging level of at least MICROSTRAIN_LOGGING_LEVEL_INFO_ to work properly
     #endif // !MICROSTRAIN_LOGGING_ENABLED_INFO
@@ -415,7 +358,6 @@ int main(const int argc, const char* argv[])
     serial_port_init(&device_port);
 
 #if INDIVIDUAL_SCRIPT == 1
-
     (void)argc;
     (void)argv;
 
@@ -435,9 +377,7 @@ int main(const int argc, const char* argv[])
     }
 
     MICROSTRAIN_LOG_INFO(" Baudrate set to : %u .\n", BAUDRATE);
-
 #else
-
     BAUDRATE = 460800;
 
     if (argc < 2) {
@@ -449,7 +389,6 @@ int main(const int argc, const char* argv[])
     MICROSTRAIN_LOG_INFO("Connecting to the device on port %s with %d baudrate.\n", PORT_NAME, BAUDRATE);
 #endif
 
-
     // Open the connection to the device
     if (!serial_port_open(&device_port, PORT_NAME, BAUDRATE))
     {
@@ -459,83 +398,76 @@ int main(const int argc, const char* argv[])
     mip_interface device;
     initialize_device(&device, &device_port, BAUDRATE);
 
-
-    #if SC_CONFIG == 0
-
+#if SC_CONFIG == 0
     // Set accel a 8g
     mip_3dm_write_sensor_range(&device, MIP_SENSOR_RANGE_TYPE_ACCEL, 3);
     mip_3dm_save_sensor_range(&device, MIP_SENSOR_RANGE_TYPE_ACCEL);
 
-    // Set gyro a 500 dps
-    mip_3dm_write_sensor_range(&device, MIP_SENSOR_RANGE_TYPE_GYRO,3);
-    mip_3dm_save_sensor_range(&device, MIP_SENSOR_RANGE_TYPE_GYRO);
+    // // Set gyro a 500 dps
+    // mip_3dm_write_sensor_range(&device, MIP_SENSOR_RANGE_TYPE_GYRO,3);
+    // mip_3dm_save_sensor_range(&device, MIP_SENSOR_RANGE_TYPE_GYRO);
 
-    #endif
-    
     // Capture gyro bias
     capture_gyro_bias(&device);
-    mip_3dm_save_gyro_bias(&device); 
-
-    #if SC_CONFIG == 0
+    //mip_3dm_save_gyro_bias(&device); 
 
     // Configure the message format for sensor data
     configure_sensor_message_format(&device);
 
     // Configure the message format for filter data
     configure_filter_message_format(&device);
-
-    #endif
-
-    // Setup event triggers/actions on > 45 degrees filter pitch and roll Euler angles
-    // configure_event_triggers(&device);
-    // configure_event_actions(&device);
-    // enable_events(&device);
-    mip_cmd_result cmd_result;
-
-    #if SC_CONFIG == 0
-
-    // Configure Sensor-to-Vehicle Transformation
-    MICROSTRAIN_LOG_INFO("Configuring sensor-to-vehicle transformation.\n");
-    cmd_result = mip_3dm_write_sensor_2_vehicle_transform_euler(
-        &device,
-        0.0f, // Roll
-        0.0f, // Pitch
-        0.0f  // Yaw
-    );
-
-    if (!mip_cmd_result_is_ack(cmd_result))
-    {
-        exit_from_command(&device, cmd_result, "Could not configure sensor-to-vehicle transformation!\n");
-    }
-
-    #endif
-
+    
+    mip_3dm_save_device_settings(&device);  
+#endif
+    
     // Initialize the navigation filter
     initialize_filter(&device);
 
-    // Initialize sample buffer with thread-safe access
-    sample_buffer_t sample_buffer = {0};
-    sample_buffer.output_files = createCsvFiles();
+    mip_cmd_result cmd_result;
     
+    CsvFiles files = createCsvFiles();
+
+    sensor_buffer_t sensor_buffer = {0};
+    sensor_buffer.output_files = files.csv1;
+    filter_buffer_t filter_buffer = {0};
+    filter_buffer.output_files = files.csv2;
+
 #if USE_THREADS
-    if (pthread_mutex_init(&sample_buffer.buffer_mutex, NULL) != 0)
+    if (pthread_mutex_init(&sensor_buffer.buffer_mutex, NULL) != 0)
     {
-        MICROSTRAIN_LOG_ERROR("Failed to initialize sample buffer mutex!\n");
-        closeCsvFiles(sample_buffer.output_files);
-        terminate(&device_port, "Could not initialize sample buffer mutex!\n", false);
+        MICROSTRAIN_LOG_ERROR("Failed to initialize sensor buffer mutex!\n");
+        closeCsvFiles(sensor_buffer.output_files);
+        terminate(&device_port, "Could not initialize sensor buffer mutex!\n", false);
+    }
+    if (pthread_mutex_init(&filter_buffer.buffer_mutex, NULL) != 0)
+    {
+        MICROSTRAIN_LOG_ERROR("Failed to initialize filter buffer mutex!\n");
+        closeCsvFiles(filter_buffer.output_files);
+        terminate(&device_port, "Could not initialize filter buffer mutex!\n", false);
     }
 #endif // USE_THREADS
 
     MICROSTRAIN_LOG_INFO("Registering packet callbacks.\n");
-    
+
+    // SDK data processing flow triggered by mip_interface_update():
+    //   1. SDK receives raw bytes from device
+    //   2. SDK parses bytes into MIP packets
+    //   3. SDK iterates over each field in the packet
+    //   4. SDK invokes any registered field callbacks whose descriptors match
+    //   5. SDK invokes packet callbacks with afterFields=true AFTER all field callbacks complete
+    //
+    // afterFields=true guarantees all fields in the packet are available when our callback
+    // fires, which is required for our GPS (tow, week_number) cross-packet synchronization.
+    // afterFields=false would fire before field extraction, leaving data unavailable.
+
     mip_dispatch_handler sensor_packet_handler;
     mip_interface_register_packet_callback(
         &device,
         &sensor_packet_handler,
         MIP_SENSOR_DATA_DESC_SET,
-        false,
+        true,  // afterFields=true: fires after all fields in this packet have been processed
         &sensor_packet_callback,
-        &sample_buffer
+        &sensor_buffer
     );
 
     mip_dispatch_handler filter_packet_handler;
@@ -543,26 +475,10 @@ int main(const int argc, const char* argv[])
         &device,
         &filter_packet_handler,
         MIP_FILTER_DATA_DESC_SET,
-        false,
+        true,  // afterFields=true: fires after all fields in this packet have been processed
         &filter_packet_callback,
-        &sample_buffer
+        &filter_buffer
     );
-
-#if SC_CONFIG == 0    
-    mip_3dm_save_device_settings(&device);  
-#endif
-
-    
-    // Resume the device
-    // Note: Since the device was idled for configuration, it needs to be resumed to output the data streams
-    
-    MICROSTRAIN_LOG_INFO("Resuming the device.\n");
-    cmd_result = mip_base_resume(&device);
-
-    if (!mip_cmd_result_is_ack(cmd_result))
-    {
-        exit_from_command(&device, cmd_result, "Could not resume the device!\n");
-    }
 
 #if USE_THREADS
     MICROSTRAIN_LOG_INFO("Initializing the device update function for threading.\n");
@@ -575,237 +491,38 @@ int main(const int argc, const char* argv[])
     pthread_t data_thread;
     pthread_create(&data_thread, NULL, data_collection_thread, (void*)&thread_data);
 #endif // USE_THREADS
-    
-    MICROSTRAIN_LOG_INFO("The device is configured... waiting for the filter to enter AHRS mode.\n");
-    
-    mip_filter_mode current_state = filter_status.filter_state;
-    
-        // Wait for the device to initialize
-#if (MAGNETOMETER_FEATURE == 1)
-    while (filter_status.filter_state < MIP_FILTER_MODE_AHRS)
-#else
-    while (filter_status.filter_state < MIP_FILTER_MODE_VERT_GYRO)
-#endif
+
+
+    // Resume the device
+    // Note: Since the device was idled for configuration, it needs to be resumed to output the data streams
+    MICROSTRAIN_LOG_INFO("Resuming the device.\n");
+    cmd_result = mip_base_resume(&device);
+
+    if (!mip_cmd_result_is_ack(cmd_result))
     {
-        // Update the device state
-        // Note: This will update the device callbacks to trigger the filter state change
-        // Note: The recommended default wait time is 10 ms, but could be 0 for non-blocking read operations
-        mip_interface_update(
-            &device,
-            10,   // Time to wait
-            false // From command
-        );
-        
-        // Filter state change
-        if (current_state != filter_status.filter_state)
-        {
-            display_filter_state(filter_status.filter_state);
-            current_state = filter_status.filter_state;
-        }
+        exit_from_command(&device, cmd_result, "Could not resume the device!\n");
     }
-    
-    int flags = fcntl(STDIN_FILENO, F_GETFL);
-    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 
-    // Get the start time of the device update loop to handle exiting the application
     
-    mip_timestamp previous_print_timestamp = 0;
-    mip_timestamp current_timestamp = 0;
-    
-    mip_timestamp previous_print_idle = 0;
-    mip_timestamp current_print_idle = 0;
-    
-    uint64_t unixTime = 0;
-    
-    rData_state rState = START;
-
-    CsvFiles currentFiles;
-
     const mip_timestamp loop_start_time = get_current_timestamp();
-    
-    previous_print_idle = loop_start_time;
-
-    // static uint64_t last_printed_inTime = 0;
-
-    double last_printed_inTime = 0.0;
     
     while (1)
     {
-        if(get_current_timestamp() - loop_start_time >= RUN_TIME_SECONDS * 1000) break; // Running loop . Exit after a predetermined time in seconds
+        // Exit after the configured run time
+        if (get_current_timestamp() - loop_start_time >= RUN_TIME_SECONDS * 1000) break;
 
-        char c = 0;
-        ssize_t n = read(STDIN_FILENO, &c, 1);
-
-        if(n==1){
-
-                if (c == 'n' || c == 'N') {
-                    rState = CREATE_NEW_CVS;
-                    MICROSTRAIN_LOG_INFO("Creating new INS files...\n");
-                } 
-                if (c == 'q' || c == 'Q')  {
-                    rState = FINISH;
-                    MICROSTRAIN_LOG_INFO("INS logging is finishing...\n");
-                }
-                if (c == 's' || c == 'S') {
-                    rState = START_UP;
-                    MICROSTRAIN_LOG_INFO("INS logging is starting up...\n");
-                } 
-
-                if (c == 'p' || c == 'P') {
-
-                    flagStop = !flagStop;
-                    MICROSTRAIN_LOG_INFO("Stop trigger\n");
-                }
-        }
-
-        switch(rState)
+        // Stress-test: send 100 pings per iteration while data collection runs in its own thread.
+        // Each mip_base_ping() call invokes the device update function, which in threaded mode
+        // (update_device) sleeps 5ms and returns true without calling mip_interface_default_update,
+        // keeping command traffic isolated from the data collection thread.
+        MICROSTRAIN_LOG_WARN("Running device stress test!\n");
+        for (uint8_t counter = 0; counter < 100; ++counter)
         {
-            case START:
-                    MICROSTRAIN_LOG_INFO("INS logging  output data for %ds.\n", RUN_TIME_SECONDS);
-                    currentFiles = createCsvFiles();
-                    fileSetCounter++;
-                    rState = MIP_IDLE;
-            break;
-
-            case CREATE_NEW_CVS:
-                    {
-                        flagStop = false;
-                        MICROSTRAIN_LOG_INFO("Setting the INS device to idle.\n");
-    
-                        mip_cmd_result cmd_result = mip_base_set_idle(&device);
-    
-                        if (!mip_cmd_result_is_ack(cmd_result))
-                        {
-                            exit_from_command(&device, cmd_result, "Could not set the INS device to idle!\n");
-                        }
-    
-                        
-                        if (fileSetCounter > 1) {
-                            MICROSTRAIN_LOG_INFO("Closing previous INS files...\n");
-                            closeCsvFiles(currentFiles);
-                        }
-    
-    
-                        currentFiles = createCsvFiles();
-    
-                        fileSetCounter++;
-                        MICROSTRAIN_LOG_INFO("INS files created.\n");
-    
-                        rState =RESET_FILTER;
-
-                    }
-            break;
-
-            case RESET_FILTER:
-                    {
-                        MICROSTRAIN_LOG_INFO("Resetting the INS filter...\n");
-                        mip_cmd_result cmd_result = mip_filter_reset(&device);
-    
-                        if (!mip_cmd_result_is_ack(cmd_result))
-                        {
-                            exit_from_command(&device, cmd_result, "Could not reset the INS filter!\n");
-                        }
-
-                        sleep(5); // Sleep for x second to allow the filter reset to process before resuming the device
-
-                        MICROSTRAIN_LOG_INFO("Resuming the INS device.\n");
-                        cmd_result = mip_base_resume(&device);
-
-                        if (!mip_cmd_result_is_ack(cmd_result))
-                        {
-                            exit_from_command(&device, cmd_result, "Could not resume the INS device!\n");
-                        }
-
-                        rState = MIP_IDLE;
-                    }
-
-            break;
-
-
-            case FINISH:
-                    {
-                        if (fileSetCounter > 1) {
-                            MICROSTRAIN_LOG_INFO("Closing previous INS files...\n");
-                            closeCsvFiles(currentFiles);
-                        }
-
-                        MICROSTRAIN_LOG_INFO("Setting the INS device to idle.\n");
-    
-                        mip_cmd_result cmd_result = mip_base_set_idle(&device);
-    
-                        if (!mip_cmd_result_is_ack(cmd_result))
-                        {
-                            exit_from_command(&device, cmd_result, "Could not set the INS device to idle!\n");
-                        }
-
-                        goto go_out;  // Salir del bucle usando goto
-                    }
-            break;
-
-            case START_UP:
-                    // Update the device state
-                    // Note: This will update the device callbacks to trigger the filter state change
-                    // Note: The recommended default wait time is 10 ms, but could be 0 for non-blocking read operations
-                    mip_interface_update(
-                        &device,
-                        0,   // Time to wait   
-                        false // From command
-                    );
-
-                    // Filter state change
-                    if (current_state != filter_status.filter_state)
-                    {
-                        display_filter_state(filter_status.filter_state);
-                        current_state = filter_status.filter_state;
-                    }
-                    
-                    current_timestamp = get_current_timestamp();
-                    unixTime = current_timestamp;
-
-                    
-                    // Print out data based on the sample rate (1000 ms / SAMPLE_RATE_HZ)
-                    if (current_timestamp - previous_print_timestamp >= 1000 / SAMPLE_RATE_HZ)
-                    {
-                        previous_print_timestamp = current_timestamp;
-                    }
-#if (MAGNETOMETER_FEATURE== 1)
-                    if (filter_status.filter_state >= MIP_FILTER_MODE_AHRS)
-#else
-                    if (filter_status.filter_state >= MIP_FILTER_MODE_VERT_GYRO)
-#endif            
-                    {
-                        // if(sensor_inTime.nanoseconds != last_printed_inTime ){
-                        if(sensor_gps_timestamp.tow > last_printed_inTime ){
-                            // last_printed_inTime = sensor_inTime.nanoseconds;
-                            last_printed_inTime = sensor_gps_timestamp.tow;
-                            //MICROSTRAIN_LOG_INFO("Muestra 100Hz\n");
-                            unixTime =get_current_timestamp();
-                            //unixTime =get_unix_time_ns();
-                            saveDataToCsv(currentFiles, &unixTime);
-                        }
-                    }
-            break;
-
-            case MIP_IDLE:
-                    current_print_idle = get_current_timestamp();
-                    if(current_print_idle - previous_print_idle >= 60000){
-                        MICROSTRAIN_LOG_INFO("Waiting the key 's' or 'S' to start INS logging.\n");
-                        previous_print_idle = current_print_idle;
-                    }
-            break;
-
-            default:
-            break;
-                    
+            mip_base_ping(&device);
         }
-
     }
-    
-    go_out:
 
-    // Restoring stdin to blocking mode before exiting
-    fcntl(STDIN_FILENO, F_SETFL, flags);
-    
+    // Flush any remaining samples before exit
     flush_sample_buffer(&sample_buffer);
     closeCsvFiles(sample_buffer.output_files);
 
@@ -820,13 +537,14 @@ int main(const int argc, const char* argv[])
     {
         pthread_mutex_destroy(&lock);
         pthread_mutex_destroy(&sample_buffer.buffer_mutex);
-        free(thread_return_code);
+        // Do NOT free thread_return_code here: if join failed, the pointer was not written
         terminate(&device_port, "Failed to join the thread!\n", false);
     }
 
     pthread_mutex_destroy(&sample_buffer.buffer_mutex);
     pthread_mutex_destroy(&lock);
-    free(thread_return_code);
+    // thread_return_code is always NULL (data_collection_thread returns NULL), free is valid but a no-op
+    (void)thread_return_code;
 #else
     pthread_mutex_destroy(&sample_buffer.buffer_mutex);
 #endif // USE_THREADS
@@ -1019,13 +737,21 @@ static void configure_sensor_message_format(mip_interface* _device)
     }
     
     const uint16_t actual_sensor_rate = sensor_base_rate / sensor_decimation;  // Calculate actual rate
-    const uint16_t gps_time_decimation = sensor_decimation/2;  // Use same decimation for consistency
-    
+
+    // GPS shared timestamp (MIP_DATA_DESC_SHARED_GPS_TIME, 0xFF/0xD3) uses decimation=1,
+    // meaning it runs at base_rate (e.g. 200Hz) while sensor data runs at SAMPLE_RATE_HZ
+    // (e.g. 100Hz). This 1:2 ratio means 2 GPS timestamps arrive per sensor sample, giving
+    // higher time resolution for synchronization and interpolation. Both sensor and filter
+    // descriptor sets use the same (tow, week_number) pair from this shared field as the
+    // cross-packet correlation key.
+    const uint16_t gps_time_decimation = sensor_decimation/2; // GPS timestamp at half the sensor rate for better synchronization resolution
+
     MICROSTRAIN_LOG_INFO(
-        "SENSOR: Base=%dHz | Decimation=%d | Actual Rate: %dHz (Requested: %dHz)%s\n",
+        "SENSOR: Base=%dHz | GPS_ts=%dHz (dec=1) | Data=%dHz (dec=%d) | Requested=%dHz%s\n",
         sensor_base_rate,
-        sensor_decimation,
+        sensor_base_rate,          // GPS always at base_rate
         actual_sensor_rate,
+        sensor_decimation,
         SAMPLE_RATE_HZ,
         (actual_sensor_rate != SAMPLE_RATE_HZ) ? " [MISMATCH!]" : " [OK]"
     );
@@ -1145,13 +871,20 @@ static void configure_filter_message_format(mip_interface* _device)
     }
     
     const uint16_t actual_filter_rate = filter_base_rate / filter_decimation;  // Calculate actual rate
-    const uint16_t filter_gps_time_decimation = filter_decimation/2;  // Use same decimation for consistency
+    // GPS shared timestamp (MIP_DATA_DESC_SHARED_GPS_TIME, 0xFF/0xD3) uses decimation=1,
+    // meaning it runs at base_rate (e.g. 200Hz) while filter data runs at SAMPLE_RATE_HZ
+    // (e.g. 100Hz). This 1:2 ratio means 2 GPS timestamps arrive per filter sample, giving
+    // higher time resolution for synchronization and interpolation. Both sensor and filter
+    // descriptor sets use the same (tow, week_number) pair from this shared field as the
+    // cross-packet correlation key.
+    const uint16_t filter_gps_time_decimation = filter_decimation/2; // GPS timestamp at half the filter rate for better synchronization resolution  
 
     MICROSTRAIN_LOG_INFO(
-        "FILTER: Base=%dHz | Decimation=%d | Actual Rate: %dHz (Requested: %dHz)%s\n",
+        "FILTER: Base=%dHz | GPS_ts=%dHz (dec=1) | Data=%dHz (dec=%d) | Requested=%dHz%s\n",
         filter_base_rate,
-        filter_decimation,
+        filter_base_rate,          // GPS always at base_rate
         actual_filter_rate,
+        filter_decimation,
         SAMPLE_RATE_HZ,
         (actual_filter_rate != SAMPLE_RATE_HZ) ? " [MISMATCH!]" : " [OK]"
     );
@@ -1282,57 +1015,6 @@ static void initialize_filter(mip_interface* _device)
 
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Displays the current filter state when changes occur
-///
-/// @details Outputs readable messages for filter state transitions:
-///          - Initialization mode
-///          - Vertical gyro mode
-///          - AHRS mode
-///          - Full navigation mode
-///
-/// @param _filter_state Current filter mode from the MIP device interface
-///
-///
-static void display_filter_state(const mip_filter_mode _filter_state)
-{
-    const char* mode_description = "startup";
-    const char* mode_type        = "STARTUP";
-
-    switch (_filter_state)
-    {
-        case MIP_FILTER_MODE_INIT:
-        {
-            mode_description = "initialization";
-            mode_type        = "MIP_FILTER_MODE_INIT";
-            break;
-        }
-        case MIP_FILTER_MODE_VERT_GYRO:
-        {
-            mode_description = "vertical gyro";
-            mode_type        = "MIP_FILTER_MODE_VERT_GYRO";
-            break;
-        }
-        case MIP_FILTER_MODE_AHRS:
-        {
-            mode_description = "AHRS";
-            mode_type        = "MIP_FILTER_MODE_AHRS";
-            break;
-        }
-        case MIP_FILTER_MODE_FULL_NAV:
-        {
-            mode_description = "full navigation";
-            mode_type        = "MIP_FILTER_MODE_FULL_NAV";
-            break;
-        }
-        default:
-        {
-            break;
-        }
-    }
-
-    MICROSTRAIN_LOG_INFO("The filter has entered %s mode. (%d) %s\n", mode_description, (uint8_t)_filter_state, mode_type);
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief Gets the current system timestamp in milliseconds
@@ -1549,11 +1231,24 @@ static void initialize_device(mip_interface* _device, serial_port* _device_port,
 
     sleep(1); // wait to save the baudrate
 
-    // uint32_t baudRead =0;
-
-    // mip_3dm_read_uart_baudrate(_device, &baudRead);
-
-    // MICROSTRAIN_LOG_INFO("Read Baudrate %u.\n", &baudRead);
+    // IMPORTANTE: Reconfigurar el puerto serial al nuevo baudrate  
+    serial_port_set_baudrate(_device_port, 460800);  
+    
+    // Reconfigurar el puerto serial físico  
+    serial_port_set_baudrate(_device_port, 460800);  
+    
+    // Actualizar solo el timeout del parser  
+    mip_parser_set_timeout(  
+        mip_interface_parser(_device),  
+        mip_timeout_from_baudrate(460800)  
+    );  
+    
+    // Actualizar solo el timeout de la cola de comandos  
+    mip_cmd_queue_set_base_reply_timeout(  
+        mip_interface_cmd_queue(_device),  
+        2000  
+    );
+    
 #elif DEFAULT_CONFIG == 0 && SC_CONFIG == 0
 
     MICROSTRAIN_LOG_INFO("Loading device settings.\n");
@@ -1700,6 +1395,7 @@ uint64_t get_unix_time_ns() {
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
+
 void generateFileName(char *baseName, int counter, char *fileName) {
     sprintf(fileName, "%s_%d.csv", baseName, counter);
 }
@@ -1709,51 +1405,35 @@ CsvFiles createCsvFiles() {
     char fileName[MAX_FILENAME_LENGTH];
 
     // Generar nombres para los tres archivos
-    generateFileName("SensorConnectData_", fileSetCounter, fileName);
+    generateFileName("SensorData_", fileSetCounter, fileName);
     files.csv1 = fopen(fileName, "w");
     if (files.csv1 == NULL) {
         perror("Error to open file 1");
         exit(1);
     }
 
+            
     //CSV Header 
     fprintf(files.csv1, 
-            "Time,GPS_ts,fGPS_ts,"
+            "Time,GPS_ts,GPS_ts:valid,"
             "scaledAccelX,scaledAccelY,scaledAccelZ,"
             "deltaVelX,deltaVelY,deltaVelZ,"
-            "estLinearAccelX,estLinearAccelY,estLinearAccelZ,estLinearAccel:valid,"
-            "estAngularRateX,estAngularRateY,estAngularRateZ,estAngularRate:valid,"
-            "estGravityX,estGravityY,estGravityZ,estGravity:valid,"
-            "flag\n");
+            "orientQuaternion[0],orientQuaternion[1],orientQuaternion[2],orientQuaternion[3],flag\n");
 
-    generateFileName("Quaternion_", fileSetCounter, fileName);
+    generateFileName("FilterData_", fileSetCounter, fileName);
     files.csv2 = fopen(fileName, "w");
     if (files.csv2 == NULL) {
         perror("Error to open file 2");
         exit(1);
     }
-
+            
+    //CSV Header 
     fprintf(files.csv2, 
-            "Time,GPS_ts,"
-            "orientQuaternion[0],"
-            "orientQuaternion[1],"
-            "orientQuaternion[2],"
-            "orientQuaternion[3],flag\n");
-
-    generateFileName("QuaternionEst_", fileSetCounter, fileName);
-    files.csv3 = fopen(fileName, "w");
-    if (files.csv3 == NULL) {
-        perror("Error to open file 3");
-        exit(1);
-    }
-
-    fprintf(files.csv3, 
-            "Time,fGPS_ts,"
-            "estOrientQuaternion[0],"
-            "estOrientQuaternion[1],"
-            "estOrientQuaternion[2],"
-            "estOrientQuaternion[3],"
-            "estOrientQuaternion:valid,flag\n");
+            "Time,fGPS_ts,fGPS_ts:valid,"
+            "estLinearAccelX,estLinearAccelY,estLinearAccelZ,estLinearAccel:valid,"
+            "estAngularRateX,estAngularRateY,estAngularRateZ,estAngularRate:valid,"
+            "estGravityX,estGravityY,estGravityZ,estGravity:valid,"
+            "estOrientQuaternion[0], estOrientQuaternion[1],estOrientQuaternion[2],estOrientQuaternion[3],estOrientQuaternion:valid,flag\n");
 
     return files;
 }
@@ -1761,82 +1441,8 @@ CsvFiles createCsvFiles() {
 void closeCsvFiles(CsvFiles files) {
     if (files.csv1) fclose(files.csv1);
     if (files.csv2) fclose(files.csv2);
-    if (files.csv3) fclose(files.csv3);
 }
 
-// Función para escribir cadenas de texto formateadas en los archivos CSV
-void writeDataToCsv(CsvFiles files, const char *line1, const char *line2, const char *line3) {
-    fputs(line1, files.csv1);
-    fputs(line2, files.csv2);
-    fputs(line3, files.csv3);
-}
-
-void saveDataToCsv(CsvFiles files, uint64_t* unix_ns){
-
-    memset(buffer0,0,BUFFER0_SIZE);
-    memset(buffer1,0,BUFFER1_SIZE);
-    memset(buffer2,0,BUFFER2_SIZE);
-
-    uint8_t flag = 0;
-
-    if(flagStop) flag = 1;
-    else flag = 0;
-
-    snprintf(   buffer0,
-                BUFFER0_SIZE,
-                "%" PRIu64 "," 
-                "%10.3f,%10.3f,"                               
-                "%9.6f,%9.6f,%9.6f,"
-                "%9.6f,%9.6f,%9.6f,"
-                "%9.6f,%9.6f,%9.6f,%u,"
-                "%9.6f,%9.6f,%9.6f,%u,"
-                "%9.6f,%9.6f,%9.6f,%u,"                                             
-                "%u\n",                                                        
-                *unix_ns,
-                sensor_gps_timestamp.tow,
-                filter_gps_timestamp.tow,                                                                                            
-                sensor_accel_scaled.scaled_accel[0], sensor_accel_scaled.scaled_accel[1], sensor_accel_scaled.scaled_accel[2], 
-                sensor_delta_velocity.delta_velocity[0], sensor_delta_velocity.delta_velocity[1], sensor_delta_velocity.delta_velocity[2],
-                filter_linear_accel.accel[0], filter_linear_accel.accel[1], filter_linear_accel.accel[2], filter_linear_accel.valid_flags,
-                filter_angular_rate.gyro[0], filter_angular_rate.gyro[1], filter_angular_rate.gyro[2], filter_angular_rate.valid_flags, 
-                filter_gravity.gravity[0], filter_gravity.gravity[1], filter_gravity.gravity[2], filter_gravity.valid_flags,
-                (unsigned int)flag
-            );
-
-
-
-    snprintf(   buffer1,
-                BUFFER1_SIZE,
-                "%" PRIu64 ","                              
-                "%10.3f,"                             
-                "%9.6f,%9.6f,%9.6f,%9.6f,"
-                "%u\n",                                                         
-                *unix_ns, 
-                sensor_gps_timestamp.tow,                                                                                        
-                sensor_quaternion.q[0], sensor_quaternion.q[1], sensor_quaternion.q[2], sensor_quaternion.q[3], 
-                (unsigned int)flag                                  
-            );
-
-
-
-    snprintf(   buffer2,
-                BUFFER2_SIZE,
-                "%" PRIu64 ","     
-                "%10.3f,"                          
-                "%9.6f,%9.6f,%9.6f,%9.6f,%u,"                                                          
-                "%u\n",                                                          
-                *unix_ns,    
-                filter_gps_timestamp.tow,                                                                                         
-                filter_quaternion.q[0], filter_quaternion.q[1], filter_quaternion.q[2], filter_quaternion.q[3], filter_quaternion.valid_flags,
-                (unsigned int)flag                                 
-            );
-
-
-    writeDataToCsv(files, buffer0 ,buffer1, buffer2);
-
-
-
-}
 
 
 char* find_device(const char* keyword) {
@@ -1864,16 +1470,56 @@ char* find_device(const char* keyword) {
 }
 
 
+static void flush_sensor_buffer(sensor_buffer_t* _buffer)
+{
+    if (_buffer == NULL || _buffer->count == 0)
+    {
+        return;
+    }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Callback function that processes received MIP packets
-///
-/// @details Flushes buffered accelerometer samples to stdout and the optional
-///          CSV file.
-///
-/// @param _buffer Sample buffer to flush
-///
-static void flush_sample_buffer(sample_buffer_t* _buffer)
+    MICROSTRAIN_LOG_INFO("Flushing %zu samples:\n", _buffer->count);
+
+    for (size_t i = 0; i < _buffer->count; ++i)
+    {
+        const sensorData_t* data = &_buffer->sample[i];
+
+
+
+
+        fprintf(_buffer->output_files
+            "%" PRIu64 "," 
+            "%10.3f,%u,%10.3f,%u,"                              // GPS_ts sensor+valid, filter+valid
+            "%9.6f,%9.6f,%9.6f,"
+            "%9.6f,%9.6f,%9.6f,"
+            "%9.6f,%9.6f,%9.6f,%u,"
+            "%9.6f,%9.6f,%9.6f,%u,"
+            "%9.6f,%9.6f,%9.6f,%u,\n",                                                        
+            data->timestamp,
+            data->sensorData.gpsTs.tow, data->sensorData.gpsTs.valid_flags,
+            data->sensorData.accel.scaled_accel[0], data->sensorData.accel.scaled_accel[1], data->sensorData.accel.scaled_accel[2], 
+            data->sensorData.deltaV.delta_velocity[0], data->sensorData.deltaV.delta_velocity[1], data->sensorData.deltaV.delta_velocity[2],
+            data->filterData.accel.accel[0], data->filterData.accel.accel[1], data->filterData.accel.accel[2], data->filterData.accel.valid_flags,
+            data->filterData.ang.gyro[0], data->filterData.ang.gyro[1], data->filterData.ang.gyro[2], data->filterData.ang.valid_flags, 
+            data->filterData.g.gravity[0], data->filterData.g.gravity[1], data->filterData.g.gravity[2], data->filterData.g.valid_flags
+        );
+
+
+
+        
+    }
+
+    if (_buffer->output_files != NULL)
+    {
+        fflush(_buffer->output_files.csv1);
+    }
+
+
+    _buffer->last_flush_time = _buffer->sample[_buffer->count - 1].timestamp;
+    _buffer->count           = 0;
+}
+
+
+static void flush_filter_buffer(filter_buffer_t* _buffer)
 {
     if (_buffer == NULL || _buffer->count == 0)
     {
@@ -1886,17 +1532,31 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
     {
         const sample_t* s = &_buffer->sample[i];
 
+        // Warn if shared GPS timestamps diverged despite using (tow, week_number) sync.
+        // This can happen when PPS is not valid and the device falls back to internal clock.
+        // valid_flags TIME_VALID = 0x0003 means both TOW and week_number have been set.
+        if (s->sensorData.gpsTs.tow != s->filterData.gpsTs.tow ||
+            s->sensorData.gpsTs.week_number != s->filterData.gpsTs.week_number)
+        {
+            MICROSTRAIN_LOG_WARN(
+                "GPS timestamp mismatch at sample %zu: sensor tow=%.3f wk=%u | filter tow=%.3f wk=%u\n",
+                i,
+                s->sensorData.gpsTs.tow, s->sensorData.gpsTs.week_number,
+                s->filterData.gpsTs.tow, s->filterData.gpsTs.week_number
+            );
+        }
+
         fprintf(_buffer->output_files.csv1,
             "%" PRIu64 "," 
-            "%10.3f,%10.3f,"                               
+            "%10.3f,%u,%10.3f,%u,"                              // GPS_ts sensor+valid, filter+valid
             "%9.6f,%9.6f,%9.6f,"
             "%9.6f,%9.6f,%9.6f,"
             "%9.6f,%9.6f,%9.6f,%u,"
             "%9.6f,%9.6f,%9.6f,%u,"
             "%9.6f,%9.6f,%9.6f,%u,\n",                                                        
             s->timestamp,
-            s->sensorData.gpsTs.tow,
-            s->filterData.gpsTs.tow,                                                                                            
+            s->sensorData.gpsTs.tow, s->sensorData.gpsTs.valid_flags,
+            s->filterData.gpsTs.tow, s->filterData.gpsTs.valid_flags,
             s->sensorData.accel.scaled_accel[0], s->sensorData.accel.scaled_accel[1], s->sensorData.accel.scaled_accel[2], 
             s->sensorData.deltaV.delta_velocity[0], s->sensorData.deltaV.delta_velocity[1], s->sensorData.deltaV.delta_velocity[2],
             s->filterData.accel.accel[0], s->filterData.accel.accel[1], s->filterData.accel.accel[2], s->filterData.accel.valid_flags,
@@ -1904,21 +1564,21 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
             s->filterData.g.gravity[0], s->filterData.g.gravity[1], s->filterData.g.gravity[2], s->filterData.g.valid_flags
         );
 
-        fprintf(   _buffer->output_files.csv2,
+        fprintf(_buffer->output_files.csv2,
             "%" PRIu64 ","                              
-            "%10.3f,"                             
+            "%10.3f,%u,"                                // GPS_ts + valid_flags
             "%9.6f,%9.6f,%9.6f,%9.6f\n",                                                         
             s->timestamp, 
-            s->sensorData.gpsTs.tow,                                                                                        
+            s->sensorData.gpsTs.tow, s->sensorData.gpsTs.valid_flags,
             s->sensorData.q.q[0], s->sensorData.q.q[1], s->sensorData.q.q[2], s->sensorData.q.q[3]               
         );
 
-        fprintf(   _buffer->output_files.csv3,
+        fprintf(_buffer->output_files.csv3,
             "%" PRIu64 ","     
-            "%10.3f,"                          
+            "%10.3f,%u,"                                // GPS_ts + valid_flags
             "%9.6f,%9.6f,%9.6f,%9.6f,%u\n",                                                          
             s->timestamp,    
-            s->filterData.gpsTs.tow,                                                                                         
+            s->filterData.gpsTs.tow, s->filterData.gpsTs.valid_flags,
             s->filterData.q.q[0], s->filterData.q.q[1], s->filterData.q.q[2], s->filterData.q.q[3], s->filterData.q.valid_flags
         );
 
@@ -1945,7 +1605,20 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
 
 static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
 {
-    sample_buffer_t* sampleBuffer = (sample_buffer_t*)_user;
+    // This callback is registered for MIP_SENSOR_DATA_DESC_SET (0x80) with afterFields=true.
+    // Fields expected per packet (configured in configure_sensor_message_format):
+    //   MIP_DATA_DESC_SHARED_GPS_TIME      (0xFF/0xD3) — shared GPS timestamp, decimation=1 (base_rate)
+    //   MIP_DATA_DESC_SENSOR_ACCEL_SCALED  (0x80/0x04) — scaled accelerometer data
+    //   MIP_DATA_DESC_SENSOR_DELTA_VELOCITY(0x80/0x08) — delta velocity
+    //   MIP_DATA_DESC_SENSOR_COMP_QUATERNION(0x80/0x0A) — complementary quaternion
+    //   MIP_DATA_DESC_SHARED_REFERENCE_TIME(0xFF/0xD5) — monotonic reference timestamp (never jumps)
+    //
+    // MIP_DATA_DESC_SHARED_GPS_TIME belongs to MIP_SHARED_DATA_DESC_SET (0xFF) but is embedded
+    // inside the 0x80 packet when configured via mip_3dm_write_message_format for that desc set.
+    // The (tow, week_number) pair is identical to the one in the filter packet at the same moment,
+    // making it the correct cross-packet synchronization key.
+
+    sensor_buffer_t* sampleBuffer = (sensor_buffer_t*)_user;
 
     if (sampleBuffer == NULL) return;
 
@@ -1957,33 +1630,35 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
     mip_field_view field_view;
     mip_field_init_empty(&field_view);
 
-    sensorData_t sensorData = {0};
-    sensorR_t sensor = {0};
+    // Use per-buffer context instead of static locals (static locals are not thread-safe
+    // and prevent correct reset between packets when threading is enabled)
+    sensorData_t* sensorData = &sampleBuffer->pending_sensorData;
+    sensorR_t*    sensor     = &sampleBuffer->pending_sensor;
 
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
-        if(sensor.value == 0b00011111) break; // If all data has been extracted, break the loop
+        if(sensor->value == 0b00011111) break; // If all data has been extracted, break the loop
 
         switch( mip_field_field_descriptor(&field_view) ){
 
             case MIP_DATA_DESC_SHARED_GPS_TIME:
-                if(sensor.bits.gpsTs == 0) sensor.bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData.gpsTs) ? 1 : 0;
+                if(sensor->bits.gpsTs == 0) sensor->bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData->gpsTs) ? 1 : 0;
                 break;
 
             case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
-                if(sensor.bits.accel == 0) sensor.bits.accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensorData.accel) ? 1 : 0;
+                if(sensor->bits.accel == 0) sensor->bits.accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensorData->accel) ? 1 : 0;
                 break;
 
             case MIP_DATA_DESC_SENSOR_DELTA_VELOCITY:
-                if(sensor.bits.deltaV == 0) sensor.bits.deltaV = extract_mip_sensor_delta_velocity_data_from_field(&field_view, &sensorData.deltaV) ? 1 : 0;
+                if(sensor->bits.deltaV == 0) sensor->bits.deltaV = extract_mip_sensor_delta_velocity_data_from_field(&field_view, &sensorData->deltaV) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_SENSOR_COMP_QUATERNION:
-                if(sensor.bits.q == 0) sensor.bits.q = extract_mip_sensor_comp_quaternion_data_from_field(&field_view, &sensorData.q) ? 1 : 0;
+                if(sensor->bits.q == 0) sensor->bits.q = extract_mip_sensor_comp_quaternion_data_from_field(&field_view, &sensorData->q) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_SHARED_REFERENCE_TIME:
-                if(sensor.bits.inTime == 0) sensor.bits.inTime = extract_mip_shared_reference_timestamp_data_from_field(&field_view, &sensorData.inTime) ? 1 : 0;
+                if(sensor->bits.inTime == 0) sensor->bits.inTime = extract_mip_shared_reference_timestamp_data_from_field(&field_view, &sensorData->inTime) ? 1 : 0;
                 break;
 
              default:
@@ -1992,28 +1667,32 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
 
     }
 
-    if(sensor.value != 0b00011111)
+    if(sensor->value != 0b00011111)
     {
-        MICROSTRAIN_LOG_WARN("Received a sensor packet with missing fields! Received fields bitmask: 0b%05u\n", sensor.value);
+#if USE_THREADS
+        pthread_mutex_unlock(&sampleBuffer->buffer_mutex);
+#endif // USE_THREADS        
+        return;
     }
     
-    // Synchronization by timestamp: store sensor data and sync flags
+    //MICROSTRAIN_LOG_INFO("Received sensor packet with GPS tow=%.3f\n", sensorData->gpsTs.tow);
+    
+    // Synchronization via shared GPS timestamp (tow, week_number):
+    // Both sensor and filter packets include MIP_DATA_DESC_SHARED_GPS_TIME at decimation=1.
+    // The pair (tow, week_number) is the same value for packets that correspond to the same
+    // physical moment, regardless of independent descriptor-set clocks or host-side jitter.
     if (sampleBuffer->count < SAMPLE_BUFFER_SIZE)
     {
-        sample_t* sample = &sampleBuffer->sample[sampleBuffer->count];
-        
-        // Store sensor data
-        sample->timestamp = _timestamp;
-        sample->sensorData = sensorData;
-        sample->sensor_sync_flags = sensor;
-        
-        // Check if both sensor and filter data have arrived for this timestamp
-        if (sample->filter_sync_flags.value == 0b00111111)
-        {
-            // Both datasets complete - move to next sample
-            sampleBuffer->count++;
-        }
+        size_t i = sampleBuffer->count;
+        sampleBuffer->sample[i].timestamp = _timestamp; 
+        sampleBuffer->sample[i] = *sensorData;
+
+        sampleBuffer->count++;  
     }
+
+    *sensor     = (sensorR_t){0};
+    *sensorData = (sensorData_t){0};
+    
 
     if (sampleBuffer->last_flush_time == 0)
     {
@@ -2026,7 +1705,7 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
          _timestamp - sampleBuffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
     )
     {
-        flush_sample_buffer(sampleBuffer);
+        flush_sensor_buffer(sampleBuffer);
     }
 
 #if USE_THREADS
@@ -2037,7 +1716,20 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
 
 static void filter_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
 {
-    sample_buffer_t* sampleBuffer = (sample_buffer_t*)_user;
+    // This callback is registered for MIP_FILTER_DATA_DESC_SET (0x82) with afterFields=true.
+    // Fields expected per packet (configured in configure_filter_message_format):
+    //   MIP_DATA_DESC_SHARED_GPS_TIME             (0xFF/0xD3) — shared GPS timestamp, decimation=1 (base_rate)
+    //   MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION  (0x82/0x0E) — linear acceleration estimate
+    //   MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE (0x82/0x0E) — compensated angular rate
+    //   MIP_DATA_DESC_FILTER_ATT_QUATERNION        (0x82/0x03) — attitude quaternion
+    //   MIP_DATA_DESC_FILTER_FILTER_STATUS         (0x82/0x10) — filter status flags
+    //   MIP_DATA_DESC_FILTER_GRAVITY_VECTOR        (0x82/0x13) — gravity vector
+    //
+    // The shared GPS (tow, week_number) from 0xFF/0xD3 matches the sensor packet's shared GPS
+    // timestamp at the same physical moment, enabling cross-packet synchronization between
+    // MIP_SENSOR_DATA_DESC_SET (0x80) and MIP_FILTER_DATA_DESC_SET (0x82).
+
+    filter_buffer_t* sampleBuffer = (filter_buffer_t*)_user;
 
     if (sampleBuffer == NULL) return;
 
@@ -2049,37 +1741,39 @@ static void filter_packet_callback(void* _user, const mip_packet_view* _packet_v
     mip_field_view field_view;
     mip_field_init_empty(&field_view);
 
-    filterData_t filterData = {0};
-    filterR_t filter = {0};
+    // Use per-buffer context instead of static locals (static locals are not thread-safe
+    // and prevent correct reset between packets when threading is enabled)
+    filterData_t* filterData = &sampleBuffer->pending_filterData;
+    filterR_t*    filter     = &sampleBuffer->pending_filter;
 
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
-        if(filter.value == 0b00111111) break; // If all data has been extracted, break the loop
+        if(filter->value == 0b00111111) break; // If all data has been extracted, break the loop
         
         switch(mip_field_field_descriptor(&field_view)){
 
             case MIP_DATA_DESC_SHARED_GPS_TIME:
-                if(filter.bits.gpsTs == 0) filter.bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &filterData.gpsTs) ? 1 : 0;
+                if(filter->bits.gpsTs == 0) filter->bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &filterData->gpsTs) ? 1 : 0;
                 break;
 
             case MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION:
-                if(filter.bits.accel == 0) filter.bits.accel = extract_mip_filter_linear_accel_data_from_field(&field_view, &filterData.accel) ? 1 : 0;
+                if(filter->bits.accel == 0) filter->bits.accel = extract_mip_filter_linear_accel_data_from_field(&field_view, &filterData->accel) ? 1 : 0;
                 break;
 
             case MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE:
-                if(filter.bits.ang == 0) filter.bits.ang = extract_mip_filter_comp_angular_rate_data_from_field(&field_view, &filterData.ang) ? 1 : 0;
+                if(filter->bits.ang == 0) filter->bits.ang = extract_mip_filter_comp_angular_rate_data_from_field(&field_view, &filterData->ang) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_FILTER_ATT_QUATERNION:
-                if(filter.bits.q == 0) filter.bits.q = extract_mip_filter_attitude_quaternion_data_from_field(&field_view, &filterData.q) ? 1 : 0;
+                if(filter->bits.q == 0) filter->bits.q = extract_mip_filter_attitude_quaternion_data_from_field(&field_view, &filterData->q) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_FILTER_FILTER_STATUS:
-                if(filter.bits.status == 0) filter.bits.status = extract_mip_filter_status_data_from_field(&field_view, &filterData.status) ? 1 : 0;
+                if(filter->bits.status == 0) filter->bits.status = extract_mip_filter_status_data_from_field(&field_view, &filterData->status) ? 1 : 0;
                 break;
 
              case MIP_DATA_DESC_FILTER_GRAVITY_VECTOR:
-                if(filter.bits.g == 0) filter.bits.g = extract_mip_filter_gravity_vector_data_from_field(&field_view, &filterData.g) ? 1 : 0;
+                if(filter->bits.g == 0) filter->bits.g = extract_mip_filter_gravity_vector_data_from_field(&field_view, &filterData->g) ? 1 : 0;
                 break;
 
              default:
@@ -2088,41 +1782,39 @@ static void filter_packet_callback(void* _user, const mip_packet_view* _packet_v
 
     }
 
-    if(filter.value != 0b00111111)
+    if(filter->value != 0b00111111)
     {
-        MICROSTRAIN_LOG_WARN("Received a filter packet with missing fields! Received fields bitmask: 0b%06u\n", filter.value);
+#if USE_THREADS
+        pthread_mutex_unlock(&sampleBuffer->buffer_mutex);
+#endif // USE_THREADS        
+        return;
     }
-    
-    // Synchronization by timestamp: store filter data and sync flags
+
+    // Synchronization via shared GPS timestamp (tow, week_number):
+    // Both sensor and filter packets include MIP_DATA_DESC_SHARED_GPS_TIME at decimation=1.
+    // The pair (tow, week_number) is the same value for packets that correspond to the same
+    // physical moment, regardless of independent descriptor-set clocks or host-side jitter.
     if (sampleBuffer->count < SAMPLE_BUFFER_SIZE)
     {
-        sample_t* sample = &sampleBuffer->sample[sampleBuffer->count];
-        
-        // Store filter data
-        sample->timestamp = _timestamp;
-        sample->filterData = filterData;
-        sample->filter_sync_flags = filter;
-        
-        // Check if both sensor and filter data have arrived for this timestamp
-        if (sample->sensor_sync_flags.value == 0b00011111)
-        {
-            // Both datasets complete - move to next sample
-            sampleBuffer->count++;
-        }
+        size_t i = sampleBuffer->count;
+
+        sampleBuffer->sample[i].timestamp = _timestamp;
+        sampleBuffer->sample[i]  = *filterData;
+        sampleBuffer->count++;
     }
+
+    *filter     = (filterR_t){0};
+    *filterData = (filterData_t){0};
+    
 
     if (sampleBuffer->last_flush_time == 0)
     {
         sampleBuffer->last_flush_time = _timestamp;
     }
 
-    if (
-        sampleBuffer->count >= SAMPLE_BUFFER_SIZE ||
-        (_timestamp >= sampleBuffer->last_flush_time &&
-         _timestamp - sampleBuffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
-    )
+    if (sampleBuffer->count >= SAMPLE_BUFFER_SIZE || (_timestamp >= sampleBuffer->last_flush_time && _timestamp - sampleBuffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS))
     {
-        flush_sample_buffer(sampleBuffer);
+        flush_filter_buffer(sampleBuffer);
     }
 
 #if USE_THREADS
@@ -2134,25 +1826,31 @@ static void filter_packet_callback(void* _user, const mip_packet_view* _packet_v
 
 static bool update_device(mip_interface* _device, mip_timeout _wait_time, bool _from_cmd)
 {
-    // Do normal updates only if not called from a command handler
-    // Note: This is the separation between the main/other thread and the data collection thread
+    // SDK data processing flujo (called from data_collection_thread when _from_cmd=false):
+    //   1. mip_interface_default_update() reads bytes from the serial port
+    //   2. SDK parses bytes into MIP packets
+    //   3. SDK iterates over each field in the packet
+    //   4. SDK matches field descriptors against registered callbacks
+    //   5. SDK invokes packet callbacks with afterFields=true after all field callbacks complete
+    //
+    // When called from a command handler (_from_cmd=true), we skip the normal update and
+    // sleep instead to avoid blocking the data collection thread. This keeps command traffic
+    // separated from data traffic across two threads.
     if (!_from_cmd)
     {
         return mip_interface_default_update(_device, _wait_time, _from_cmd);
     }
 
-    // Create a 5-millisecond timeout
+    // Sleep 5ms when called from command context to save power.
+    // Note: Waiting too long here will cause commands to timeout.
     const struct timespec ts = {
-        .tv_sec  = 0,          // 0 Seconds
-        .tv_nsec = 5 * 1000000 // 5 Milliseconds
+        .tv_sec  = 0,
+        .tv_nsec = 5 * 1000000  // 5 milliseconds
     };
-
-    // Sleep for a bit to save power
-    // Note: Waiting too long in here will cause commands to timeout
     nanosleep(&ts, NULL);
 
-    // Note: This needs to return true to avoid terminating the data collection thread
-    // Note: Returning false may cause a race condition (see comments in mip_interface_wait_for_reply)
+    // Must return true to avoid terminating the data collection thread.
+    // Returning false may cause a race condition (see mip_interface_wait_for_reply).
     return true;
 }
 
@@ -2165,12 +1863,13 @@ static void* data_collection_thread(void* _thread_data)
 
     while (thread_data->running)
     {
-        // Update the device for data collection
-        // Note: The recommended default wait time is 10 ms, but could be 0 for non-blocking read operations
+        // Call mip_interface_update() which drives the full SDK processing flujo:
+        // recv bytes → parse MIP packets → iterate fields → invoke callbacks.
+        // Recommended wait time is 10ms (blocking read); use 0 for non-blocking.
         const bool updated = mip_interface_update(
             thread_data->device,
-            10,   // Time to wait
-            false // From command
+            10,   // Wait up to 10ms for data (recommended default)
+            false // Not from command — triggers mip_interface_default_update
         );
 
         // Clean up and exit the thread on failed device updates
