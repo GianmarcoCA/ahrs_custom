@@ -59,6 +59,28 @@
 #include <errno.h>
 #include <string.h>
 #include <dirent.h>
+#include <assert.h>
+
+#ifdef _MSC_VER
+// MSVC doesn't support pthread
+// Wrapping basic pthread functionality through threads.h
+#include <threads.h>
+typedef thrd_t                     pthread_t;
+typedef struct pthread_attr_t      pthread_attr_t;
+typedef mtx_t                      pthread_mutex_t;
+typedef struct pthread_mutexattr_t pthread_mutexattr_t;
+
+int  pthread_mutex_init(pthread_mutex_t* m, const pthread_mutexattr_t* a);
+int  pthread_mutex_destroy(pthread_mutex_t* m);
+int  pthread_mutex_lock(pthread_mutex_t* m);
+int  pthread_mutex_unlock(pthread_mutex_t* m);
+int  pthread_create(pthread_t* th, const pthread_attr_t* attr, void* (*func)(void*), void* arg);
+int  pthread_join(pthread_t t, void** res);
+int  nanosleep(const struct timespec* request, struct timespec* remain);
+void sched_yield();
+#else
+#include <pthread.h>
+#endif // _MSC_VER
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -84,6 +106,9 @@
 
 #define SC_CONFIG  0 // Set this option to configure the device with the settings used for the SensorConnect application.
 
+// TODO: Enable/disable data collection threading
+/// @brief Use this to test the behaviors of threading
+#define USE_THREADS true
 
 /// @brief Maximum time between sample buffer output operations
 static const mip_timeout SAMPLE_PRINT_PERIOD_MS = 100;
@@ -204,20 +229,6 @@ typedef struct{
     mip_filter_gravity_vector_data              g;
 } filterData_t;
 
-typedef struct {
-    mip_timestamp timestamp;
-    filterData_t filterData;
-    sensorData_t sensorData;
-} sample_t;
-
-typedef struct sample_buffer{
-    sample_t sample[SAMPLE_BUFFER_SIZE];
-    size_t         count;
-    mip_timestamp  last_flush_time;
-    CsvFiles output_files;
-} sample_buffer_t;
-
-
 typedef union {
     uint8_t value;      // Acceso al dato completo (16 bits)
     struct {
@@ -244,13 +255,49 @@ typedef union {
     } bits;
 } filterR_t;
 
+
+typedef struct {
+    mip_timestamp timestamp;
+    filterData_t filterData;
+    sensorData_t sensorData;
+    sensorR_t sensor_sync_flags;  // Synchronization flags for sensor data
+    filterR_t filter_sync_flags;  // Synchronization flags for filter data
+} sample_t;
+
+typedef struct sample_buffer{
+    sample_t sample[SAMPLE_BUFFER_SIZE];
+    size_t         count;
+    mip_timestamp  last_flush_time;
+    CsvFiles output_files;
+    pthread_mutex_t buffer_mutex;  // Mutex for thread-safe access
+} sample_buffer_t;
+
+#if USE_THREADS
+// Basic structure for thread data
+typedef struct thread_data
+{
+    mip_interface* device;
+    volatile bool  running;
+} thread_data_t;
+#endif // USE_THREADS
+
+
+
 /*********************************************************************
  * PUBLIC FUNCTIONS
  */
 static void flush_sample_buffer(sample_buffer_t* _buffer);
 
-// Packet callback handler
-static void packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
+// Forward declarations
+static void log_callback(void* _user, const microstrain_log_level _level, const char* _format, va_list _args);
+static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
+static void filter_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
+
+#if USE_THREADS
+// Threaded functions
+static bool  update_device(mip_interface* _device, mip_timeout _wait_time, bool _from_cmd);
+static void* data_collection_thread(void* _thread_data);
+#endif // USE_THREADS
 
 uint64_t get_unix_time_ns(void); 
 
@@ -276,8 +323,12 @@ char* find_device(const char* keyword);
  * PRIVATE  FUNCTIONS
  */
 
-// Custom logging handler callback
-static void log_callback(void* _user, const microstrain_log_level _level, const char* _format, va_list _args);
+
+ 
+////////////////////////////////////////////////////////////////////////////////
+/// @addtogroup _7_series_ahrs_example_c
+/// @{
+///
 
 // Capture gyro bias
 static void capture_gyro_bias(mip_interface* _device);
@@ -332,11 +383,27 @@ int main(const int argc, const char* argv[])
     #error This example requires a logging level of at least MICROSTRAIN_LOGGING_LEVEL_INFO_ to work properly
     #endif // !MICROSTRAIN_LOGGING_ENABLED_INFO
 
+#if USE_THREADS
+    // Create a mutex for the logging callbacks when multi-threading
+    fprintf(stdout, "Initializing the threading mutex.\n");
+    pthread_mutex_t lock;
+    if (pthread_mutex_init(&lock, NULL) != 0)
+    {
+        fprintf(stderr, "Failed to initialize the threading mutex!\n");
+        fprintf(stdout, "Press 'Enter' to exit the program.\n");
+        getc(stdin);
+        return 1;
+    }
+#endif // USE_THREADS
+
     // Initialize the custom logger to print messages/errors as they occur
     // Note: The logging level parameter doesn't need to match the max logging level.
     // If the parameter is higher than the max level, higher-level logging functions will be ignored
+#if USE_THREADS
+    MICROSTRAIN_LOG_INIT(&log_callback, MICROSTRAIN_LOG_LEVEL_INFO, (void*)&lock);
+#else
     MICROSTRAIN_LOG_INIT(&log_callback, MICROSTRAIN_LOG_LEVEL_INFO, NULL);
-
+#endif // USE_THREADS
 
     // Unused parameters
     // Unused parameters
@@ -446,26 +513,40 @@ int main(const int argc, const char* argv[])
     // Initialize the navigation filter
     initialize_filter(&device);
 
-    MICROSTRAIN_LOG_INFO("Registering data callbacks.\n");
-    mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SHARED_GPS_TIME,         extract_mip_shared_gps_timestamp_data_from_field,          &sensor_gps_timestamp);
-    mip_interface_register_extractor(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_ACCEL_SCALED,     extract_mip_sensor_scaled_accel_data_from_field,           &sensor_accel_scaled);
-    mip_interface_register_extractor(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_DELTA_VELOCITY,   extract_mip_sensor_delta_velocity_data_from_field,         &sensor_delta_velocity);
-    mip_interface_register_extractor(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_COMP_QUATERNION,  extract_mip_sensor_comp_quaternion_data_from_field,        &sensor_quaternion);
-    mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SHARED_REFERENCE_TIME,   extract_mip_shared_reference_timestamp_data_from_field,    &sensor_inTime);
-    // mip_interface_register_extractor(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_GYRO_SCALED,      extract_mip_sensor_scaled_gyro_data_from_field,            &sensor_gyro_scaled);
-    // mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_MAG_SCALED,       extract_mip_sensor_scaled_mag_data_from_field,             &sensor_mag_scaled);
-    // mip_interface_register_extractor(&device, &sensor_data_handlers[5], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_DELTA_THETA ,     extract_mip_sensor_delta_theta_data_from_field,            &sensor_delta_theta);
+    // Initialize sample buffer with thread-safe access
+    sample_buffer_t sample_buffer = {0};
+    sample_buffer.output_files = createCsvFiles();
     
-    MICROSTRAIN_LOG_INFO("Registering filter data callbacks.\n");
-    mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_SHARED_GPS_TIME,                    extract_mip_shared_gps_timestamp_data_from_field,          &filter_gps_timestamp);
-    mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION,         extract_mip_filter_linear_accel_data_from_field,            &filter_linear_accel);
-    mip_interface_register_extractor(&device, &filter_data_handlers[2], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE ,   extract_mip_filter_comp_angular_rate_data_from_field,       &filter_angular_rate);
-    mip_interface_register_extractor(&device, &filter_data_handlers[3], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_FILTER_ATT_QUATERNION,              extract_mip_filter_attitude_quaternion_data_from_field,     &filter_quaternion );
-    mip_interface_register_extractor(&device, &filter_data_handlers[4], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_FILTER_FILTER_STATUS,               extract_mip_filter_status_data_from_field,                  &filter_status);
-    mip_interface_register_extractor(&device, &filter_data_handlers[5], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_FILTER_GRAVITY_VECTOR,              extract_mip_filter_gravity_vector_data_from_field,          &filter_gravity);
-    // mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_FILTER_GYRO_BIAS,                   extract_mip_filter_gyro_bias_data_from_field,              &filter_gyro_bias);
-    // Register a custom callback for the event field
-    // mip_interface_register_field_callback( &device, &filter_data_handlers[5], MIP_FILTER_DATA_DESC_SET, MIP_DATA_DESC_SHARED_EVENT_SOURCE, handle_event_triggers, NULL);
+#if USE_THREADS
+    if (pthread_mutex_init(&sample_buffer.buffer_mutex, NULL) != 0)
+    {
+        MICROSTRAIN_LOG_ERROR("Failed to initialize sample buffer mutex!\n");
+        closeCsvFiles(sample_buffer.output_files);
+        terminate(&device_port, "Could not initialize sample buffer mutex!\n", false);
+    }
+#endif // USE_THREADS
+
+    MICROSTRAIN_LOG_INFO("Registering packet callbacks.\n");
+    
+    mip_dispatch_handler sensor_packet_handler;
+    mip_interface_register_packet_callback(
+        &device,
+        &sensor_packet_handler,
+        MIP_SENSOR_DATA_DESC_SET,
+        false,
+        &sensor_packet_callback,
+        &sample_buffer
+    );
+
+    mip_dispatch_handler filter_packet_handler;
+    mip_interface_register_packet_callback(
+        &device,
+        &filter_packet_handler,
+        MIP_FILTER_DATA_DESC_SET,
+        false,
+        &filter_packet_callback,
+        &sample_buffer
+    );
 
 #if SC_CONFIG == 0    
     mip_3dm_save_device_settings(&device);  
@@ -482,6 +563,18 @@ int main(const int argc, const char* argv[])
     {
         exit_from_command(&device, cmd_result, "Could not resume the device!\n");
     }
+
+#if USE_THREADS
+    MICROSTRAIN_LOG_INFO("Initializing the device update function for threading.\n");
+    // Note: This allows the update function to be split into command and data updates across multiple threads
+    mip_interface_set_update_function(&device, &update_device);
+
+    thread_data_t thread_data = {.device = &device, .running = true};
+
+    MICROSTRAIN_LOG_INFO("Creating the data collection thread.\n");
+    pthread_t data_thread;
+    pthread_create(&data_thread, NULL, data_collection_thread, (void*)&thread_data);
+#endif // USE_THREADS
     
     MICROSTRAIN_LOG_INFO("The device is configured... waiting for the filter to enter AHRS mode.\n");
     
@@ -712,6 +805,32 @@ int main(const int argc, const char* argv[])
 
     // Restoring stdin to blocking mode before exiting
     fcntl(STDIN_FILENO, F_SETFL, flags);
+    
+    flush_sample_buffer(&sample_buffer);
+    closeCsvFiles(sample_buffer.output_files);
+
+#if USE_THREADS
+    // Signal the data collection thread to stop
+    thread_data.running = false;
+
+    // Join the thread back before exiting the program
+    MICROSTRAIN_LOG_INFO("Waiting for the thread to join.\n");
+    void* thread_return_code = NULL; // Return code from the thread function (Unused)
+    if (pthread_join(data_thread, &thread_return_code) != 0)
+    {
+        pthread_mutex_destroy(&lock);
+        pthread_mutex_destroy(&sample_buffer.buffer_mutex);
+        free(thread_return_code);
+        terminate(&device_port, "Failed to join the thread!\n", false);
+    }
+
+    pthread_mutex_destroy(&sample_buffer.buffer_mutex);
+    pthread_mutex_destroy(&lock);
+    free(thread_return_code);
+#else
+    pthread_mutex_destroy(&sample_buffer.buffer_mutex);
+#endif // USE_THREADS
+    
     terminate(&device_port, "INS logging completed successfully.\n", true);
 
     return 0;
@@ -738,8 +857,13 @@ int main(const int argc, const char* argv[])
 ///
 static void log_callback(void* _user, const microstrain_log_level _level, const char* _format, va_list _args)
 {
-    // Unused parameter
-    (void)_user;
+#if USE_THREADS
+    pthread_mutex_t* lock = (pthread_mutex_t*)_user;
+    if (lock)
+        pthread_mutex_lock(lock);
+#else
+    (void)_user;  // Unused parameter
+#endif // USE_THREADS
 
     switch (_level)
     {
@@ -767,6 +891,11 @@ static void log_callback(void* _user, const microstrain_log_level _level, const 
             break;
         }
     }
+
+#if USE_THREADS
+    if (lock)
+        pthread_mutex_unlock(lock);
+#endif // USE_THREADS
 }
 
 
@@ -1751,11 +1880,11 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
         return;
     }
 
-    MICROSTRAIN_LOG_INFO("Flushing %zu accel samples:\n", _buffer->count);
+    MICROSTRAIN_LOG_INFO("Flushing %zu samples:\n", _buffer->count);
 
     for (size_t i = 0; i < _buffer->count; ++i)
     {
-        const sample_t* s = &_buffer->samples[i];
+        const sample_t* s = &_buffer->sample[i];
 
         fprintf(_buffer->output_files.csv1,
             "%" PRIu64 "," 
@@ -1766,13 +1895,13 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
             "%9.6f,%9.6f,%9.6f,%u,"
             "%9.6f,%9.6f,%9.6f,%u,\n",                                                        
             s->timestamp,
-            s->s_gpsTs.tow,
-            s->f_gpsTs.tow,                                                                                            
-            s->s_accel.scaled_accel[0], s->s_accel.scaled_accel[1], s->s_accel.scaled_accel[2], 
-            s->s_deltaV.delta_velocity[0], s->s_deltaV.delta_velocity[1], s->s_deltaV.delta_velocity[2],
-            s->f_accel.accel[0], s->f_accel.accel[1], s->f_accel.accel[2], s->f_accel.valid_flags,
-            s->f_angRate.gyro[0], s->f_angRate.gyro[1], s->f_angRate.gyro[2], s->f_angRate.valid_flags, 
-            s->f_gravity.gravity[0], s->f_gravity.gravity[1], s->f_gravity.gravity[2], s->f_gravity.valid_flags
+            s->sensorData.gpsTs.tow,
+            s->filterData.gpsTs.tow,                                                                                            
+            s->sensorData.accel.scaled_accel[0], s->sensorData.accel.scaled_accel[1], s->sensorData.accel.scaled_accel[2], 
+            s->sensorData.deltaV.delta_velocity[0], s->sensorData.deltaV.delta_velocity[1], s->sensorData.deltaV.delta_velocity[2],
+            s->filterData.accel.accel[0], s->filterData.accel.accel[1], s->filterData.accel.accel[2], s->filterData.accel.valid_flags,
+            s->filterData.ang.gyro[0], s->filterData.ang.gyro[1], s->filterData.ang.gyro[2], s->filterData.ang.valid_flags, 
+            s->filterData.g.gravity[0], s->filterData.g.gravity[1], s->filterData.g.gravity[2], s->filterData.g.valid_flags
         );
 
         fprintf(   _buffer->output_files.csv2,
@@ -1780,8 +1909,8 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
             "%10.3f,"                             
             "%9.6f,%9.6f,%9.6f,%9.6f\n",                                                         
             s->timestamp, 
-            s->s_gpsTs.tow,                                                                                        
-            s->s_q.q[0], s->s_q.q[1], s->s_q.q[2], s->s_q.q[3]               
+            s->sensorData.gpsTs.tow,                                                                                        
+            s->sensorData.q.q[0], s->sensorData.q.q[1], s->sensorData.q.q[2], s->sensorData.q.q[3]               
         );
 
         fprintf(   _buffer->output_files.csv3,
@@ -1789,8 +1918,8 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
             "%10.3f,"                          
             "%9.6f,%9.6f,%9.6f,%9.6f,%u\n",                                                          
             s->timestamp,    
-            s->f_gpsTs.tow,                                                                                         
-            s->f_q.q[0], s->f_q.q[1], s->f_q.q[2], s->f_q.q[3], s->f_q.valid_flags
+            s->filterData.gpsTs.tow,                                                                                         
+            s->filterData.q.q[0], s->filterData.q.q[1], s->filterData.q.q[2], s->filterData.q.q[3], s->filterData.q.valid_flags
         );
 
         
@@ -1809,7 +1938,7 @@ static void flush_sample_buffer(sample_buffer_t* _buffer)
         fflush(_buffer->output_files.csv3);
     }
 
-    _buffer->last_flush_time = _buffer->samples[_buffer->count - 1].timestamp;
+    _buffer->last_flush_time = _buffer->sample[_buffer->count - 1].timestamp;
     _buffer->count           = 0;
 }
 
@@ -1820,10 +1949,13 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
 
     if (sampleBuffer == NULL) return;
 
+#if USE_THREADS
+    pthread_mutex_lock(&sampleBuffer->buffer_mutex);
+#endif // USE_THREADS
+
     // Field object for iterating the packet and extracting each field
     mip_field_view field_view;
     mip_field_init_empty(&field_view);
-
 
     sensorData_t sensorData = {0};
     sensorR_t sensor = {0};
@@ -1832,7 +1964,7 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
     {
         if(sensor.value == 0b00011111) break; // If all data has been extracted, break the loop
 
-        switch( mip_field_descriptor(&field_view) ){
+        switch( mip_field_field_descriptor(&field_view) ){
 
             case MIP_DATA_DESC_SHARED_GPS_TIME:
                 if(sensor.bits.gpsTs == 0) sensor.bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData.gpsTs) ? 1 : 0;
@@ -1860,17 +1992,27 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
 
     }
 
-    if(sensor.value == 0) sensor.value = 1;
-
+    if(sensor.value != 0b00011111)
+    {
+        MICROSTRAIN_LOG_WARN("Received a sensor packet with missing fields! Received fields bitmask: 0b%05u\n", sensor.value);
+    }
+    
+    // Synchronization by timestamp: store sensor data and sync flags
     if (sampleBuffer->count < SAMPLE_BUFFER_SIZE)
     {
-        sensorData_t* sampleSensor = &sampleBuffer->sample[sampleBuffer->count++].sensorData;
-
-        sampleSensor->gpsTs  = sensorData.gpsTs;
-        sampleSensor->accel  = sensorData.accel;
-        sampleSensor->deltaV = sensorData.deltaV;
-        sampleSensor->q      = sensorData.q;
-        sampleSensor->inTime = sensorData.inTime;
+        sample_t* sample = &sampleBuffer->sample[sampleBuffer->count];
+        
+        // Store sensor data
+        sample->timestamp = _timestamp;
+        sample->sensorData = sensorData;
+        sample->sensor_sync_flags = sensor;
+        
+        // Check if both sensor and filter data have arrived for this timestamp
+        if (sample->filter_sync_flags.value == 0b00111111)
+        {
+            // Both datasets complete - move to next sample
+            sampleBuffer->count++;
+        }
     }
 
     if (sampleBuffer->last_flush_time == 0)
@@ -1884,6 +2026,169 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
          _timestamp - sampleBuffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
     )
     {
-        flush_accel_sample_buffer(sampleBuffer);
+        flush_sample_buffer(sampleBuffer);
     }
+
+#if USE_THREADS
+    pthread_mutex_unlock(&sampleBuffer->buffer_mutex);
+#endif // USE_THREADS
 }
+
+
+static void filter_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
+{
+    sample_buffer_t* sampleBuffer = (sample_buffer_t*)_user;
+
+    if (sampleBuffer == NULL) return;
+
+#if USE_THREADS
+    pthread_mutex_lock(&sampleBuffer->buffer_mutex);
+#endif // USE_THREADS
+
+    // Field object for iterating the packet and extracting each field
+    mip_field_view field_view;
+    mip_field_init_empty(&field_view);
+
+    filterData_t filterData = {0};
+    filterR_t filter = {0};
+
+    while (mip_field_next_in_packet(&field_view, _packet_view))
+    {
+        if(filter.value == 0b00111111) break; // If all data has been extracted, break the loop
+        
+        switch(mip_field_field_descriptor(&field_view)){
+
+            case MIP_DATA_DESC_SHARED_GPS_TIME:
+                if(filter.bits.gpsTs == 0) filter.bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &filterData.gpsTs) ? 1 : 0;
+                break;
+
+            case MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION:
+                if(filter.bits.accel == 0) filter.bits.accel = extract_mip_filter_linear_accel_data_from_field(&field_view, &filterData.accel) ? 1 : 0;
+                break;
+
+            case MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE:
+                if(filter.bits.ang == 0) filter.bits.ang = extract_mip_filter_comp_angular_rate_data_from_field(&field_view, &filterData.ang) ? 1 : 0;
+                break;
+
+             case MIP_DATA_DESC_FILTER_ATT_QUATERNION:
+                if(filter.bits.q == 0) filter.bits.q = extract_mip_filter_attitude_quaternion_data_from_field(&field_view, &filterData.q) ? 1 : 0;
+                break;
+
+             case MIP_DATA_DESC_FILTER_FILTER_STATUS:
+                if(filter.bits.status == 0) filter.bits.status = extract_mip_filter_status_data_from_field(&field_view, &filterData.status) ? 1 : 0;
+                break;
+
+             case MIP_DATA_DESC_FILTER_GRAVITY_VECTOR:
+                if(filter.bits.g == 0) filter.bits.g = extract_mip_filter_gravity_vector_data_from_field(&field_view, &filterData.g) ? 1 : 0;
+                break;
+
+             default:
+                break;
+        }
+
+    }
+
+    if(filter.value != 0b00111111)
+    {
+        MICROSTRAIN_LOG_WARN("Received a filter packet with missing fields! Received fields bitmask: 0b%06u\n", filter.value);
+    }
+    
+    // Synchronization by timestamp: store filter data and sync flags
+    if (sampleBuffer->count < SAMPLE_BUFFER_SIZE)
+    {
+        sample_t* sample = &sampleBuffer->sample[sampleBuffer->count];
+        
+        // Store filter data
+        sample->timestamp = _timestamp;
+        sample->filterData = filterData;
+        sample->filter_sync_flags = filter;
+        
+        // Check if both sensor and filter data have arrived for this timestamp
+        if (sample->sensor_sync_flags.value == 0b00011111)
+        {
+            // Both datasets complete - move to next sample
+            sampleBuffer->count++;
+        }
+    }
+
+    if (sampleBuffer->last_flush_time == 0)
+    {
+        sampleBuffer->last_flush_time = _timestamp;
+    }
+
+    if (
+        sampleBuffer->count >= SAMPLE_BUFFER_SIZE ||
+        (_timestamp >= sampleBuffer->last_flush_time &&
+         _timestamp - sampleBuffer->last_flush_time >= SAMPLE_PRINT_PERIOD_MS)
+    )
+    {
+        flush_sample_buffer(sampleBuffer);
+    }
+
+#if USE_THREADS
+    pthread_mutex_unlock(&sampleBuffer->buffer_mutex);
+#endif // USE_THREADS
+}
+
+#if USE_THREADS
+
+static bool update_device(mip_interface* _device, mip_timeout _wait_time, bool _from_cmd)
+{
+    // Do normal updates only if not called from a command handler
+    // Note: This is the separation between the main/other thread and the data collection thread
+    if (!_from_cmd)
+    {
+        return mip_interface_default_update(_device, _wait_time, _from_cmd);
+    }
+
+    // Create a 5-millisecond timeout
+    const struct timespec ts = {
+        .tv_sec  = 0,          // 0 Seconds
+        .tv_nsec = 5 * 1000000 // 5 Milliseconds
+    };
+
+    // Sleep for a bit to save power
+    // Note: Waiting too long in here will cause commands to timeout
+    nanosleep(&ts, NULL);
+
+    // Note: This needs to return true to avoid terminating the data collection thread
+    // Note: Returning false may cause a race condition (see comments in mip_interface_wait_for_reply)
+    return true;
+}
+
+
+static void* data_collection_thread(void* _thread_data)
+{
+    MICROSTRAIN_LOG_INFO("Data collection thread created!\n");
+
+    const thread_data_t* thread_data = (thread_data_t*)_thread_data;
+
+    while (thread_data->running)
+    {
+        // Update the device for data collection
+        // Note: The recommended default wait time is 10 ms, but could be 0 for non-blocking read operations
+        const bool updated = mip_interface_update(
+            thread_data->device,
+            10,   // Time to wait
+            false // From command
+        );
+
+        // Clean up and exit the thread on failed device updates
+        if (!updated)
+        {
+            // Avoid deadlocks if the connection is closed
+            mip_cmd_queue* cmd_queue = mip_interface_cmd_queue(thread_data->device);
+            assert(cmd_queue);
+            mip_cmd_queue_clear(cmd_queue);
+
+            break;
+        }
+
+        sched_yield();
+    }
+
+    // Return value unused
+    return NULL;
+}
+
+#endif // USE_THREADS
