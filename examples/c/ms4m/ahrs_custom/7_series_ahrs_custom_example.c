@@ -130,7 +130,7 @@ typedef enum rData_state
 {
     START = 0,
     RESET_FILTER,
-    CREATE_NEW_CVS,
+    CREATE_NEW_BIN,
     FINISH,
     START_UP,
     MIP_IDLE,
@@ -140,11 +140,11 @@ typedef enum rData_state
  * TYPEDEF STRUCTS
  */
 
-// Estructura para mantener los archivos CSV abiertos
+// Estructura para mantener los archivos BIN abiertos
 typedef struct {
-    FILE *csv1;
-    FILE *csv2;
-} CsvFiles;
+    FILE *bin1;
+    FILE *bin2;
+} BinFiles;
 
 typedef struct {
     bool flagStop;
@@ -213,11 +213,11 @@ typedef struct {
  * PUBLIC FUNCTIONS
  */
 
-// Función para crear y abrir tres archivos CSV
-void createCsvFiles(sensor_buffer_t* sensor_B, filter_buffer_t* filter_B, uint8_t count);
+// Función para crear y abrir tres archivos BIN
+void createBinFiles(sensor_buffer_t* sensor_B, filter_buffer_t* filter_B, uint8_t count);
 
-// Función para cerrar los archivos CSV
-void closeCsvFiles(FILE* file1, FILE* file2); 
+// Función para cerrar los archivos BIN
+void closeBinFiles(FILE* file1, FILE* file2); 
 
 // Función para encontrar el puerto del dispositivo basado en una palabra clave
 char* find_device(const char* keyword);
@@ -446,7 +446,7 @@ int main(const int argc, const char* argv[])
         if(n==1){
 
                 if (c == 'n' || c == 'N') {
-                    rState = CREATE_NEW_CVS;
+                    rState = CREATE_NEW_BIN;
                     MICROSTRAIN_LOG_INFO("Creating new INS files...\n");
                 } 
                 if (c == 'q' || c == 'Q')  {
@@ -469,11 +469,11 @@ int main(const int argc, const char* argv[])
         {
             case START:
                     MICROSTRAIN_LOG_INFO("INS logging  output data for %ds.\n", RUN_TIME_SECONDS);
-                    createCsvFiles(&sensorB, &filterB, fileCounter++);
+                    createBinFiles(&sensorB, &filterB, fileCounter++);
                     rState = MIP_IDLE;
             break;
 
-            case CREATE_NEW_CVS:
+            case CREATE_NEW_BIN:
                     sensorB.flag.flagStop = false;
                     filterB.flag.flagStop = false;
 
@@ -487,10 +487,10 @@ int main(const int argc, const char* argv[])
                     
                     if (fileCounter > 1) {
                         MICROSTRAIN_LOG_INFO("Closing previous INS files...\n");
-                        closeCsvFiles(sensorB.output_file, filterB.output_file);
+                        closeBinFiles(sensorB.output_file, filterB.output_file);
                     }
 
-                    createCsvFiles(&sensorB, &filterB, fileCounter++);
+                    createBinFiles(&sensorB, &filterB, fileCounter++);
                     MICROSTRAIN_LOG_INFO("INS files created.\n");
 
                     rState =RESET_FILTER;
@@ -526,11 +526,10 @@ int main(const int argc, const char* argv[])
 
                     if (fileCounter > 1) {
                         MICROSTRAIN_LOG_INFO("Closing previous INS files...\n");
-                        closeCsvFiles(sensorB.output_file, filterB.output_file);
+                        closeBinFiles(sensorB.output_file, filterB.output_file);
                     }
 
                     MICROSTRAIN_LOG_INFO("Setting the INS device to idle.\n");
-
                     cmd_result = mip_base_set_idle(&device);
 
                     if (!mip_cmd_result_is_ack(cmd_result))
@@ -1313,47 +1312,53 @@ static void exit_from_command(const mip_interface* _device, const mip_cmd_result
 }
 
 
-void createCsvFiles(sensor_buffer_t* sensor_B, filter_buffer_t* filter_B, uint8_t count) {
-    CsvFiles files;
+void createBinFiles(sensor_buffer_t* sensor_B, filter_buffer_t* filter_B, uint8_t count) {
+    BinFiles files;
     char fileName[MAX_FILENAME_LENGTH];
 
-    // Generar nombres para los tres archivos
+    const char* sensor_header =
+        "Time,GPS_ts,GPS_ts:valid,"
+        "scaledAccelX,scaledAccelY,scaledAccelZ,"
+        "deltaVelX,deltaVelY,deltaVelZ,"
+        "orientQuaternion[0],orientQuaternion[1],orientQuaternion[2],orientQuaternion[3],flagStop\n";
 
-    sprintf(fileName, "%s_%d.csv", "SensorData_", count);
-    files.csv1 = fopen(fileName, "w");
-    if (files.csv1 == NULL) {
+    const char* filter_header =
+        "Time,fGPS_ts,fGPS_ts:valid,"
+        "estLinearAccelX,estLinearAccelY,estLinearAccelZ,estLinearAccel:valid,"
+        "estAngularRateX,estAngularRateY,estAngularRateZ,estAngularRate:valid,"
+        "estGravityX,estGravityY,estGravityZ,estGravity:valid,"
+        "estOrientQuaternion[0], estOrientQuaternion[1],estOrientQuaternion[2],estOrientQuaternion[3],estOrientQuaternion:valid,flagStop\n";
+
+    sprintf(fileName, "%s_%d.bin", "SensorData_", count);
+    files.bin1 = fopen(fileName, "wb");
+    if (files.bin1 == NULL) {
         perror("Error to open file 1");
         exit(1);
     }
 
-    //CSV Header 
-    fprintf(files.csv1, 
-            "Time,GPS_ts,GPS_ts:valid,"
-            "scaledAccelX,scaledAccelY,scaledAccelZ,"
-            "deltaVelX,deltaVelY,deltaVelZ,"
-            "orientQuaternion[0],orientQuaternion[1],orientQuaternion[2],orientQuaternion[3],flagStop\n");
+    /* Write header: 4-byte length prefix + header string (without null terminator) */
+    uint32_t sensor_header_len = (uint32_t)strlen(sensor_header);
+    fwrite(&sensor_header_len, sizeof(uint32_t), 1, files.bin1);
+    fwrite(sensor_header, 1, sensor_header_len, files.bin1);
 
-    sprintf(fileName, "%s_%d.csv", "FilterData_", count);
-    files.csv2 = fopen(fileName, "w");
-    if (files.csv2 == NULL) {
+    sprintf(fileName, "%s_%d.bin", "FilterData_", count);
+    files.bin2 = fopen(fileName, "wb");
+    if (files.bin2 == NULL) {
         perror("Error to open file 2");
         exit(1);
     }
 
-    fprintf(files.csv2, 
-            "Time,fGPS_ts,fGPS_ts:valid,"
-            "estLinearAccelX,estLinearAccelY,estLinearAccelZ,estLinearAccel:valid,"
-            "estAngularRateX,estAngularRateY,estAngularRateZ,estAngularRate:valid,"
-            "estGravityX,estGravityY,estGravityZ,estGravity:valid,"
-            "estOrientQuaternion[0], estOrientQuaternion[1],estOrientQuaternion[2],estOrientQuaternion[3],estOrientQuaternion:valid,flagStop\n");
-    
-    sensor_B->output_file = files.csv1;
-    filter_B->output_file = files.csv2;
+    uint32_t filter_header_len = (uint32_t)strlen(filter_header);
+    fwrite(&filter_header_len, sizeof(uint32_t), 1, files.bin2);
+    fwrite(filter_header, 1, filter_header_len, files.bin2);
+
+    sensor_B->output_file = files.bin1;
+    filter_B->output_file = files.bin2;
 
     return ;
 }
 
-void closeCsvFiles(FILE* file1, FILE* file2) {
+void closeBinFiles(FILE* file1, FILE* file2) {
     if (file1) fclose(file1);
     if (file2) fclose(file2);
 }
@@ -1364,19 +1369,23 @@ void save_sensor_data(sensor_buffer_t* _buffer)
 
     uint64_t time = mip_gps_to_unix_ms(data->gpsTs);
 
-    fprintf(_buffer->output_file,
-        "%" PRIu64 "," 
-        "%10.3f,%u,"                              
-        "%9.6f,%9.6f,%9.6f,"
-        "%9.6f,%9.6f,%9.6f,"
-        "%9.6f,%9.6f,%9.6f,%9.6f,%u\n",                                                        
-        time,
-        data->gpsTs.tow, data->gpsTs.valid_flags,
-        data->accel.scaled_accel[0], data->accel.scaled_accel[1], data->accel.scaled_accel[2], 
-        data->deltaV.delta_velocity[0], data->deltaV.delta_velocity[1], data->deltaV.delta_velocity[2],
-        data->q.q[0], data->q.q[1], data->q.q[2], data->q.q[3], _buffer->flag.flagStop 
-    );
-
+    /* Binary record layout:
+     *   uint64_t  time
+     *   double    gpsTs.tow
+     *   uint16_t  gpsTs.valid_flags
+     *   float[3]  accel.scaled_accel
+     *   float[3]  deltaV.delta_velocity
+     *   float[4]  q.q
+     *   uint8_t   flagStop
+     */
+    fwrite(&time,                          sizeof(uint64_t), 1, _buffer->output_file);
+    fwrite(&data->gpsTs.tow,               sizeof(double),   1, _buffer->output_file);
+    fwrite(&data->gpsTs.valid_flags,       sizeof(uint16_t), 1, _buffer->output_file);
+    fwrite(data->accel.scaled_accel,       sizeof(float),    3, _buffer->output_file);
+    fwrite(data->deltaV.delta_velocity,    sizeof(float),    3, _buffer->output_file);
+    fwrite(data->q.q,                      sizeof(float),    4, _buffer->output_file);
+    uint8_t flagStop = (uint8_t)_buffer->flag.flagStop;
+    fwrite(&flagStop,                      sizeof(uint8_t),  1, _buffer->output_file);
 }
 
 void save_filter_data(filter_buffer_t*  _buffer){
@@ -1385,20 +1394,33 @@ void save_filter_data(filter_buffer_t*  _buffer){
 
     uint64_t time = mip_gps_to_unix_ms(data->gpsTs);
 
-    fprintf(_buffer->output_file,
-        "%" PRIu64 ","
-        "%10.3f,%u,"
-        "%9.6f,%9.6f,%9.6f,%u,"
-        "%9.6f,%9.6f,%9.6f,%u,"
-        "%9.6f,%9.6f,%9.6f,%u,"
-        "%9.6f,%9.6f,%9.6f,%9.6f,%u,%u\n",
-        time,
-        data->gpsTs.tow, data->gpsTs.valid_flags,
-        data->accel.accel[0], data->accel.accel[1], data->accel.accel[2], data->accel.valid_flags,
-        data->ang.gyro[0], data->ang.gyro[1], data->ang.gyro[2], data->ang.valid_flags,
-        data->g.gravity[0], data->g.gravity[1], data->g.gravity[2], data->g.valid_flags, 
-        data->q.q[0], data->q.q[1], data->q.q[2], data->q.q[3], data->q.valid_flags,_buffer->flag.flagStop 
-    );
+    /* Binary record layout:
+     *   uint64_t  time
+     *   double    gpsTs.tow
+     *   uint16_t  gpsTs.valid_flags
+     *   float[3]  accel.accel
+     *   uint16_t  accel.valid_flags
+     *   float[3]  ang.gyro
+     *   uint16_t  ang.valid_flags
+     *   float[3]  g.gravity
+     *   uint16_t  g.valid_flags
+     *   float[4]  q.q
+     *   uint16_t  q.valid_flags
+     *   uint8_t   flagStop
+     */
+    fwrite(&time,                    sizeof(uint64_t), 1, _buffer->output_file);
+    fwrite(&data->gpsTs.tow,         sizeof(double),   1, _buffer->output_file);
+    fwrite(&data->gpsTs.valid_flags, sizeof(uint16_t), 1, _buffer->output_file);
+    fwrite(data->accel.accel,        sizeof(float),    3, _buffer->output_file);
+    fwrite(&data->accel.valid_flags, sizeof(uint16_t), 1, _buffer->output_file);
+    fwrite(data->ang.gyro,           sizeof(float),    3, _buffer->output_file);
+    fwrite(&data->ang.valid_flags,   sizeof(uint16_t), 1, _buffer->output_file);
+    fwrite(data->g.gravity,          sizeof(float),    3, _buffer->output_file);
+    fwrite(&data->g.valid_flags,     sizeof(uint16_t), 1, _buffer->output_file);
+    fwrite(data->q.q,                sizeof(float),    4, _buffer->output_file);
+    fwrite(&data->q.valid_flags,     sizeof(uint16_t), 1, _buffer->output_file);
+    uint8_t flagStop = (uint8_t)_buffer->flag.flagStop;
+    fwrite(&flagStop,                sizeof(uint8_t),  1, _buffer->output_file);
 
 }
 
@@ -1453,13 +1475,14 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
 
+
         if(sensor->value == 0b00001111) break; // If all data has been extracted, break the loop
 
         switch( mip_field_field_descriptor(&field_view) ){
             
             case MIP_DATA_DESC_SHARED_GPS_TIME:
-                    sensor->bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData->gpsTs) ? 1 : 0;
-                    break;
+                sensor->bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData->gpsTs) ? 1 : 0;
+                break;
 
             case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
                 if(sensor->bits.accel == 0) sensor->bits.accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensorData->accel) ? 1 : 0;
