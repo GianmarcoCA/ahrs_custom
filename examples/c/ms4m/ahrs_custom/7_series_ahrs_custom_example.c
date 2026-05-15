@@ -123,11 +123,12 @@ static const uint32_t RUN_TIME_SECONDS = 10*60*60;
  */ 
 
 
+
 /*********************************************************************
  * TYPEDEF ENUMS
  */
 
-typedef enum rData_state
+typedef enum 
 {
     START = 0,
     RESET_FILTER,
@@ -136,6 +137,12 @@ typedef enum rData_state
     START_UP,
     MIP_IDLE,
 } rData_state;
+
+typedef enum {
+    STOP_STATE = 0,
+    FORWARD_STATE ,
+    BACKWARD_STATE,
+}motion_state;
 
 /*********************************************************************
  * TYPEDEF STRUCTS
@@ -146,12 +153,6 @@ typedef struct {
     FILE *bin1;
     FILE *bin2;
 } BinFiles;
-
-typedef struct {
-    bool flagStop;
-    bool flagDirection;
-    bool flagStart;
-} flag_plus_t;
 
 typedef struct {
     mip_shared_gps_timestamp_data        gpsTs;
@@ -169,47 +170,51 @@ typedef struct{
 } filterData_t;
 
 typedef union {
-    uint8_t value;      // Acceso al dato completo (16 bits)
+    uint8_t value;      // Acceso al dato completo (8 bits)
     struct { 
         uint8_t gpsTs  : 1;
         uint8_t accel  : 1;
         uint8_t deltaV : 1;
         uint8_t q      : 1;
-        // ... puedes nombrar hasta el bit15
+        // ... puedes nombrar hasta el bit8
     } bits;
 } sensorR_t;
 
 typedef union {
-    uint8_t value;      // Acceso al dato completo (16 bits)
+    uint8_t value;      // Acceso al dato completo (8 bits)
     struct {
         uint8_t gpsTs   : 1;
         uint8_t accel   : 1;
         uint8_t ang     : 1;
         uint8_t g       : 1;
         uint8_t q       : 1;
-        // ... puedes nombrar hasta el bit15
+        // ... puedes nombrar hasta el bit8
     } bits;
 } filterR_t;
 
 typedef struct {
     sensorData_t sample;
     size_t count;
-    mip_timestamp  last_flush_time;
     sensorData_t pending_sensorData;
     sensorR_t    pending_sensor;
     FILE* output_file;
-    flag_plus_t flag;
+    uint8_t flag;
 } sensor_buffer_t;
 
 typedef struct {
     filterData_t sample;
     size_t count;
-    mip_timestamp  last_flush_time;
     filterData_t pending_filterData;
     filterR_t    pending_filter;
     FILE* output_file;
-    flag_plus_t flag;
+    uint8_t flag;
 } filter_buffer_t;
+
+typedef struct{
+    int8_t motionFlag;
+    sensor_buffer_t sB;
+    filter_buffer_t fB;
+} data_buffer_t;
 
 /*********************************************************************
  * PUBLIC FUNCTIONS
@@ -237,9 +242,8 @@ void save_filter_data(filter_buffer_t*  _buffer);
  * PRIVATE  FUNCTIONS
  */
 
-static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
+static void data_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
 
-static void filter_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp);
 
 // Custom logging handler callback
 static void log_callback(void* _user, const microstrain_log_level _level, const char* _format, va_list _args);
@@ -377,31 +381,19 @@ int main(const int argc, const char* argv[])
     
     MICROSTRAIN_LOG_INFO("Registering packet callbacks.\n");
 
-    sensor_buffer_t sensorB = {0};
-    filter_buffer_t filterB = {0};
+    data_buffer_t dataB ={0};
     
-    mip_dispatch_handler sensor_packet_handler;
-    mip_dispatch_handler filter_packet_handler;
-     
+    mip_dispatch_handler data_packet_handler;
 
-    createBinFiles(&sensorB, &filterB, fileCounter++);
+    createBinFiles(&dataB.sB, &dataB.fB ,fileCounter++);
 
     mip_interface_register_packet_callback(
         &device,
-        &sensor_packet_handler,
-        MIP_SENSOR_DATA_DESC_SET,
+        &data_packet_handler,
+        MIP_DISPATCH_ANY_DATA_SET,
         false,  // afterFields=true: fires after all fields in this packet have been processed
-        &sensor_packet_callback,
-        &sensorB
-    );
-
-    mip_interface_register_packet_callback(
-        &device,
-        &filter_packet_handler,
-        MIP_FILTER_DATA_DESC_SET,
-        false,  // afterFields=true: fires after all fields in this packet have been processed
-        &filter_packet_callback,
-        &filterB
+        &data_packet_callback,
+        &dataB
     );
 
     mip_cmd_result cmd_result;
@@ -437,7 +429,7 @@ int main(const int argc, const char* argv[])
     mip_timestamp current_print_idle = loop_start_time;
     
 
-    
+
 
     bool flagExit = false;
 /* 
@@ -468,9 +460,18 @@ int main(const int argc, const char* argv[])
                 } 
 
                 if (c == 'p' || c == 'P') {
-                    sensorB.flag.flagStop = !sensorB.flag.flagStop;
-                    filterB.flag.flagStop = !filterB.flag.flagStop;
-                    MICROSTRAIN_LOG_INFO("Stop trigger\n");
+                    dataB.motionFlag = STOP_STATE;
+                    MICROSTRAIN_LOG_INFO("Stop State\n");
+                }
+
+                if (c == 'f' || c == 'F') {
+                    dataB.motionFlag = FORWARD_STATE;
+                    MICROSTRAIN_LOG_INFO("Forward State\n");
+                }
+
+                if (c == 'b' || c == 'B') {
+                    dataB.motionFlag = BACKWARD_STATE;
+                    MICROSTRAIN_LOG_INFO("Backward State\n");
                 }
         }
 
@@ -478,13 +479,12 @@ int main(const int argc, const char* argv[])
         {
             case START:
                     MICROSTRAIN_LOG_INFO("INS logging  output data for %ds.\n", RUN_TIME_SECONDS);
-                    createBinFiles(&sensorB, &filterB, fileCounter++);
+                    createBinFiles(&dataB.sB, &dataB.fB, fileCounter++);
                     rState = MIP_IDLE;
             break;
 
             case CREATE_NEW_BIN:
-                    sensorB.flag.flagStop = false;
-                    filterB.flag.flagStop = false;
+                    dataB.motionFlag = STOP_STATE;
 
                     MICROSTRAIN_LOG_INFO("Setting the INS device to idle.\n");
                     cmd_result = mip_base_set_idle(&device);
@@ -496,10 +496,10 @@ int main(const int argc, const char* argv[])
                     
                     if (fileCounter > 1) {
                         MICROSTRAIN_LOG_INFO("Closing previous INS files...\n");
-                        closeBinFiles(sensorB.output_file, filterB.output_file);
+                        closeBinFiles(dataB.sB.output_file, dataB.fB.output_file);
                     }
 
-                    createBinFiles(&sensorB, &filterB, fileCounter++);
+                    createBinFiles(&dataB.sB, &dataB.fB, fileCounter++);
                     MICROSTRAIN_LOG_INFO("INS files created.\n");
 
                     rState =RESET_FILTER;
@@ -535,7 +535,7 @@ int main(const int argc, const char* argv[])
 
                     if (fileCounter > 1) {
                         MICROSTRAIN_LOG_INFO("Closing previous INS files...\n");
-                        closeBinFiles(sensorB.output_file, filterB.output_file);
+                        closeBinFiles(dataB.sB.output_file, dataB.fB.output_file);
                     }
 
                     MICROSTRAIN_LOG_INFO("Setting the INS device to idle.\n");
@@ -1393,8 +1393,7 @@ void save_sensor_data(sensor_buffer_t* _buffer)
     fwrite(data->accel.scaled_accel,       sizeof(float),    3, _buffer->output_file);
     fwrite(data->deltaV.delta_velocity,    sizeof(float),    3, _buffer->output_file);
     fwrite(data->q.q,                      sizeof(float),    4, _buffer->output_file);
-    uint8_t flag = (uint8_t)_buffer->flag.flagStop;
-    fwrite(&flag,                          sizeof(uint8_t),  1, _buffer->output_file);
+    fwrite(&_buffer->flag,                 sizeof(uint8_t),  1, _buffer->output_file);
 }
 
 void save_filter_data(filter_buffer_t*  _buffer){
@@ -1428,8 +1427,7 @@ void save_filter_data(filter_buffer_t*  _buffer){
     fwrite(&data->g.valid_flags,     sizeof(uint16_t), 1, _buffer->output_file);
     fwrite(data->q.q,                sizeof(float),    4, _buffer->output_file);
     fwrite(&data->q.valid_flags,     sizeof(uint16_t), 1, _buffer->output_file);
-    uint8_t flag = (uint8_t)_buffer->flag.flagStop;
-    fwrite(&flag    ,                sizeof(uint8_t),  1, _buffer->output_file);
+    fwrite(&_buffer->flag    ,       sizeof(uint8_t),  1, _buffer->output_file);
 
 }
 
@@ -1459,154 +1457,7 @@ char* find_device(const char* keyword) {
 }
 
 
-static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
-{
-    (void)_timestamp;
 
-    
-    sensor_buffer_t* sampleBuffer = (sensor_buffer_t*)_user;
-    
-    if (sampleBuffer == NULL) return;
-
-    
-    // Field object for iterating the packet and extracting each field
-    mip_field_view field_view;
-    mip_field_init_empty(&field_view);
-    
-    // Use per-buffer context instead of static locals (static locals are not thread-safe
-    // and prevent correct reset between packets when threading is enabled)
-    sensorData_t* sensorData = &sampleBuffer->pending_sensorData;
-    sensorR_t*    sensor     = &sampleBuffer->pending_sensor;
-    
-    
-    microstrain_serializer serializer;
-
-    while (mip_field_next_in_packet(&field_view, _packet_view))
-    {
-
-        microstrain_serializer_init_from_field(&serializer, &field_view);
-
-        if(sensor->value == 0b00001111) break; // If all data has been extracted, break the loop
-
-        switch( mip_field_field_descriptor(&field_view) ){
-            
-            
-            case MIP_DATA_DESC_SHARED_GPS_TIME:
-                sensor->bits.gpsTs = 1;
-                extract_mip_shared_gps_timestamp_data(&serializer, &sensorData->gpsTs);
-                break;
-
-            case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
-                sensor->bits.accel = 1;
-                extract_mip_sensor_scaled_accel_data(&serializer, &sensorData->accel);
-                break;
-
-            case MIP_DATA_DESC_SENSOR_DELTA_VELOCITY:
-                sensor->bits.deltaV = 1 ;
-                extract_mip_sensor_delta_velocity_data(&serializer, &sensorData->deltaV);
-                break;
-
-             case MIP_DATA_DESC_SENSOR_COMP_QUATERNION:
-                sensor->bits.q = 1;
-                extract_mip_sensor_comp_quaternion_data(&serializer, &sensorData->q);
-                break;
-
-             default:
-                break;
-        }
-
-    }
-
-
-    if(sensor->value != 0b00001111) return;
-
-    sampleBuffer->sample = *sensorData;
-
-    save_sensor_data(sampleBuffer);
-
-    sampleBuffer->pending_sensor = (sensorR_t){0};
-    sampleBuffer->pending_sensorData = (sensorData_t){0};
-
-    //sampleBuffer->flagReady = true;
-
-    return;
-
-}
-
-
-static void filter_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp)
-{
-    (void)_timestamp;
-
-    filter_buffer_t* sampleBuffer = (filter_buffer_t*)_user;
-
-    if (sampleBuffer == NULL) return;
-
-
-    // Field object for iterating the packet and extracting each field
-    mip_field_view field_view;
-    mip_field_init_empty(&field_view);
-
-    // Use per-buffer context instead of static locals (static locals are not thread-safe
-    // and prevent correct reset between packets when threading is enabled)
-    filterData_t* filterData = &sampleBuffer->pending_filterData;
-    filterR_t*    filter     = &sampleBuffer->pending_filter;
-
-     microstrain_serializer serializer;
-    
-    while (mip_field_next_in_packet(&field_view, _packet_view))
-    {
-        microstrain_serializer_init_from_field(&serializer, &field_view);
-
-        if(filter->value == 0b00011111) break; // If all data has been extracted, break the loop
-        
-        switch(mip_field_field_descriptor(&field_view)){
-            
-            case MIP_DATA_DESC_SHARED_GPS_TIME:
-                filter->bits.gpsTs = 1;
-                extract_mip_shared_gps_timestamp_data(&serializer, &filterData->gpsTs);
-                break;
-
-            case MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION:
-                filter->bits.accel = 1;
-                extract_mip_filter_linear_accel_data(&serializer, &filterData->accel);
-                break;
-
-            case MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE:
-                filter->bits.ang = 1;
-                extract_mip_filter_comp_angular_rate_data(&serializer, &filterData->ang);
-                break;
-                
-            case MIP_DATA_DESC_FILTER_GRAVITY_VECTOR:
-                filter->bits.g = 1;
-                extract_mip_filter_gravity_vector_data(&serializer, &filterData->g);
-                break;
-
-             case MIP_DATA_DESC_FILTER_ATT_QUATERNION:
-                filter->bits.q = 1;
-                extract_mip_filter_attitude_quaternion_data(&serializer, &filterData->q);
-                break;
-
-             default:
-             
-                break;
-        }
-
-    }
-
-    if(filter->value != 0b00011111) return;
-
-    sampleBuffer->sample  = *filterData;
-
-    save_filter_data(sampleBuffer);
-    sampleBuffer->pending_filter = (filterR_t){0};
-    sampleBuffer->pending_filterData = (filterData_t){0};
-
-    //sampleBuffer->flagReady = true;
-
-    return;
-
-}
 
 void sync_device_time(mip_interface* device) {
     // 1. Obtener tiempo Unix en milisegundos
@@ -1654,4 +1505,119 @@ uint64_t mip_gps_to_unix_ms(mip_shared_gps_timestamp_data gps_data) {
 
     // 4. Convertir a milisegundos y pasar a entero de 64 bits
     return (uint64_t)(unix_seconds * 1000.0);
+}
+
+
+static void data_packet_callback(void* _user, const mip_packet_view* _packet_view, mip_timestamp _timestamp){
+
+    (void)_timestamp;
+
+    data_buffer_t* sampleBuffer = (data_buffer_t*)_user;
+
+    if (sampleBuffer == NULL) return;
+
+    sampleBuffer->sB.flag = sampleBuffer->motionFlag;
+    sampleBuffer->fB.flag = sampleBuffer->motionFlag;
+    
+    mip_field_view field_view;
+    mip_field_init_empty(&field_view);
+
+    // and prevent correct reset between packets when threading is enabled)
+
+    sensorData_t* sensorData = &sampleBuffer->sB.pending_sensorData;
+    sensorR_t*    sensor     = &sampleBuffer->sB.pending_sensor;
+    
+    filterData_t* filterData = &sampleBuffer->fB.pending_filterData;
+    filterR_t*    filter     = &sampleBuffer->fB.pending_filter;
+
+    microstrain_serializer serializer;
+    
+    uint8_t desc_set = mip_packet_descriptor_set(_packet_view);  
+
+    while(mip_field_next_in_packet(&field_view, _packet_view)){  
+
+        microstrain_serializer_init_from_field(&serializer, &field_view);
+          
+        if (desc_set == 0x80 && sensor->value!=0b00001111) { // Datos de Sensor  
+            
+            switch( mip_field_field_descriptor(&field_view) ){
+                
+                
+                case MIP_DATA_DESC_SHARED_GPS_TIME:
+                    sensor->bits.gpsTs = 1;
+                    extract_mip_shared_gps_timestamp_data(&serializer, &sensorData->gpsTs);
+                    break;
+
+                case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
+                    sensor->bits.accel = 1;
+                    extract_mip_sensor_scaled_accel_data(&serializer, &sensorData->accel);
+                    break;
+
+                case MIP_DATA_DESC_SENSOR_DELTA_VELOCITY:
+                    sensor->bits.deltaV = 1 ;
+                    extract_mip_sensor_delta_velocity_data(&serializer, &sensorData->deltaV);
+                    break;
+
+                case MIP_DATA_DESC_SENSOR_COMP_QUATERNION:
+                    sensor->bits.q = 1;
+                    extract_mip_sensor_comp_quaternion_data(&serializer, &sensorData->q);
+                    break;
+
+                default:
+                    break;
+            }
+        }   
+        else if (desc_set == 0x82 && filter->value!= 0b00011111) { // Datos de Filtro  
+
+          switch(mip_field_field_descriptor(&field_view )){
+            
+            case MIP_DATA_DESC_SHARED_GPS_TIME:
+                filter->bits.gpsTs = 1;
+                extract_mip_shared_gps_timestamp_data(&serializer, &filterData->gpsTs);
+                break;
+
+            case MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION:
+                filter->bits.accel = 1;
+                extract_mip_filter_linear_accel_data(&serializer, &filterData->accel);
+                break;
+
+            case MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE:
+                filter->bits.ang = 1;
+                extract_mip_filter_comp_angular_rate_data(&serializer, &filterData->ang);
+                break;
+                
+            case MIP_DATA_DESC_FILTER_GRAVITY_VECTOR:
+                filter->bits.g = 1;
+                extract_mip_filter_gravity_vector_data(&serializer, &filterData->g);
+                break;
+
+             case MIP_DATA_DESC_FILTER_ATT_QUATERNION:
+                filter->bits.q = 1;
+                extract_mip_filter_attitude_quaternion_data(&serializer, &filterData->q);
+                break;
+
+             default:
+             
+                break;
+            }
+
+        }  
+    }  
+    
+    if(sensor->value != 0b00001111 || filter->value != 0b00011111 ) return;
+
+    sampleBuffer->sB.sample = *sensorData;
+    sampleBuffer->fB.sample  = *filterData;
+
+    save_sensor_data(&sampleBuffer->sB);
+    save_filter_data(&sampleBuffer->fB);
+
+    *sensor = (sensorR_t){0};
+    *sensorData = (sensorData_t){0};
+
+    *filter = (filterR_t){0};
+    *filterData = (filterData_t){0};
+
+    return;
+
 }
