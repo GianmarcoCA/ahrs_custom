@@ -150,31 +150,31 @@ int main() {
     // std::string com_port_gps = "/dev/ttyUSB1";
 
     std::string com_port_ins = find_device("FTDI");
-    // std::string com_port_gps = find_device("Prolific");
+    std::string com_port_gps = find_device("Prolific");
 
     std::cout << "INS: " << com_port_ins << std::endl;
-    // std::cout << "GPS: " << com_port_gps << std::endl;
+    std::cout << "GPS: " << com_port_gps << std::endl;
 
     int pipe_ins[2];
-    // int pipe_gps[2];
+    int pipe_gps[2];
 
     pipe(pipe_ins);
-    // pipe(pipe_gps);
+    pipe(pipe_gps);
 
     pid_t pid1 = fork();
     if (pid1 == 0) {
-        // close(pipe_gps[0]); close(pipe_gps[1]);
+        close(pipe_gps[0]); close(pipe_gps[1]);
         run_program(com_port_ins, "./7_series_ahrs_custom_example_c", pipe_ins);
     }
 
-    // pid_t pid2 = fork();
-    // if (pid2 == 0) {
-    //     close(pipe_ins[0]); close(pipe_ins[1]);
-    //     run_program(com_port_gps, "./recording_tramaGPS", pipe_gps);
-    // }
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        close(pipe_ins[0]); close(pipe_ins[1]);
+        run_program(com_port_gps, "./recording_tramaGPS", pipe_gps);
+    }
 
     close(pipe_ins[0]);
-    // close(pipe_gps[0]);
+    close(pipe_gps[0]);
 
     sleep(TIME_WAIT_TO_CAPTURE_GYRO_BIAS);
 
@@ -202,7 +202,7 @@ int main() {
 
             char cmd = 'p';
             write(pipe_ins[1], &cmd, 1);
-            // write(pipe_gps[1], &cmd, 1);
+            write(pipe_gps[1], &cmd, 1);
 
             std::cout << "MAIN : LONG PRESS S -> TOGGLE BLINK\n";
 
@@ -222,7 +222,7 @@ int main() {
 
                     char cmd = 's';
                     write(pipe_ins[1], &cmd, 1);
-                    // write(pipe_gps[1], &cmd, 1);
+                    write(pipe_gps[1], &cmd, 1);
                 }
                 break;
 
@@ -241,7 +241,7 @@ int main() {
 
                     char cmd = 'q';
                     write(pipe_ins[1], &cmd, 1);
-                    // write(pipe_gps[1], &cmd, 1);
+                    write(pipe_gps[1], &cmd, 1);
                 }
                 else if (flagC) {
                     std::cout << "MAIN : CREATED\n";
@@ -249,7 +249,7 @@ int main() {
 
                     char cmd = 'n';
                     write(pipe_ins[1], &cmd, 1);
-                    // write(pipe_gps[1], &cmd, 1);
+                    write(pipe_gps[1], &cmd, 1);
 
                     lastReadyToStarted = now;
                 }
@@ -271,7 +271,7 @@ int main() {
 
                     char cmd = 'q';
                     write(pipe_ins[1], &cmd, 1);
-                    // write(pipe_gps[1], &cmd, 1);
+                    write(pipe_gps[1], &cmd, 1);
                 }
                 else if (flagS && flagWaitingToStart) {
                     std::cout << "MAIN : STARTED\n";
@@ -280,7 +280,7 @@ int main() {
 
                     char cmd = 's';
                     write(pipe_ins[1], &cmd, 1);
-                    // write(pipe_gps[1], &cmd, 1);
+                    write(pipe_gps[1], &cmd, 1);
                 }
                 break;
 
@@ -298,10 +298,10 @@ int main() {
     sleep(20);
 
     close(pipe_ins[1]);
-    // close(pipe_gps[1]);
+    close(pipe_gps[1]);
 
     waitpid(pid1, nullptr, 0);
-    // waitpid(pid2, nullptr, 0);
+    waitpid(pid2, nullptr, 0);
 
     std::cout << "MAIN : Program finished\n";
     return 0;
