@@ -35,6 +35,7 @@
 #include <mip/definitions/commands_3dm.h>
 #include <mip/definitions/commands_base.h>
 #include <mip/definitions/commands_filter.h>
+#include <mip/mip_serialization.h>
 #include <mip/definitions/data_sensor.h>
 #include <mip/definitions/data_filter.h>
 #include <mip/definitions/data_shared.h>
@@ -149,6 +150,7 @@ typedef struct {
 typedef struct {
     bool flagStop;
     bool flagDirection;
+    bool flagStart;
 } flag_plus_t;
 
 typedef struct {
@@ -281,6 +283,7 @@ static void exit_from_command(const mip_interface* _device, const mip_cmd_result
 
 int main(const int argc, const char* argv[])
 {
+    int fileCounter = 1; // Contador para los archivos
     // Note: This is a compile-time way of checking that the proper logging level is enabled
     // Note: The max available logging level may differ in pre-packaged installations of the MIP SDK
     #ifndef MICROSTRAIN_LOGGING_ENABLED_INFO
@@ -379,6 +382,9 @@ int main(const int argc, const char* argv[])
     
     mip_dispatch_handler sensor_packet_handler;
     mip_dispatch_handler filter_packet_handler;
+     
+
+    createBinFiles(&sensorB, &filterB, fileCounter++);
 
     mip_interface_register_packet_callback(
         &device,
@@ -397,7 +403,7 @@ int main(const int argc, const char* argv[])
         &filter_packet_callback,
         &filterB
     );
-    
+
     mip_cmd_result cmd_result;
 
     MICROSTRAIN_LOG_INFO("Attempting to reset the navigation filter.\n");
@@ -423,17 +429,20 @@ int main(const int argc, const char* argv[])
     int flags = fcntl(STDIN_FILENO, F_GETFL);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 
-    rData_state rState = START;
+    rData_state rState = MIP_IDLE;
     
     const mip_timestamp loop_start_time = get_current_timestamp();
     
     mip_timestamp previous_print_idle = loop_start_time;
     mip_timestamp current_print_idle = loop_start_time;
     
-    int fileCounter = 1; // Contador para los archivos
+
     
 
     bool flagExit = false;
+/* 
+    sensorB.flag.flagStart =true;
+    filterB.flag.flagStart=true; */
 
     while (1)
     {
@@ -555,7 +564,7 @@ int main(const int argc, const char* argv[])
 
             case MIP_IDLE:
                     current_print_idle = get_current_timestamp();
-                    if(current_print_idle - previous_print_idle >= 60000){
+                    if(current_print_idle - previous_print_idle >= 5000){
                         MICROSTRAIN_LOG_INFO("Waiting the key 's' or 'S' to start INS logging.\n");
                         previous_print_idle = current_print_idle;
                     }
@@ -1317,17 +1326,17 @@ void createBinFiles(sensor_buffer_t* sensor_B, filter_buffer_t* filter_B, uint8_
     char fileName[MAX_FILENAME_LENGTH];
 
     const char* sensor_header =
-        "Time,GPS_ts,GPS_ts:valid,"
+        "GPS_ts.week, GPS_ts.tow, GPS:valid,"
         "scaledAccelX,scaledAccelY,scaledAccelZ,"
         "deltaVelX,deltaVelY,deltaVelZ,"
-        "orientQuaternion[0],orientQuaternion[1],orientQuaternion[2],orientQuaternion[3],flagStop\n";
+        "orientQuaternion[0],orientQuaternion[1],orientQuaternion[2],orientQuaternion[3],flag\n";
 
     const char* filter_header =
-        "Time,fGPS_ts,fGPS_ts:valid,"
+        "fGPS_ts.week,fGPS_ts.tow, fGPS_ts:valid,"
         "estLinearAccelX,estLinearAccelY,estLinearAccelZ,estLinearAccel:valid,"
         "estAngularRateX,estAngularRateY,estAngularRateZ,estAngularRate:valid,"
         "estGravityX,estGravityY,estGravityZ,estGravity:valid,"
-        "estOrientQuaternion[0], estOrientQuaternion[1],estOrientQuaternion[2],estOrientQuaternion[3],estOrientQuaternion:valid,flagStop\n";
+        "estOrientQuaternion[0], estOrientQuaternion[1],estOrientQuaternion[2],estOrientQuaternion[3],estOrientQuaternion:valid,flag\n";
 
     sprintf(fileName, "%s_%d.bin", "SensorData_", count);
     files.bin1 = fopen(fileName, "wb");
@@ -1367,7 +1376,7 @@ void save_sensor_data(sensor_buffer_t* _buffer)
 {
     const sensorData_t* data = &_buffer->sample;
 
-    uint64_t time = mip_gps_to_unix_ms(data->gpsTs);
+    // uint64_t time = mip_gps_to_unix_ms(data->gpsTs);
 
     /* Binary record layout:
      *   uint64_t  time
@@ -1378,21 +1387,21 @@ void save_sensor_data(sensor_buffer_t* _buffer)
      *   float[4]  q.q
      *   uint8_t   flagStop
      */
-    fwrite(&time,                          sizeof(uint64_t), 1, _buffer->output_file);
+    fwrite(&data->gpsTs.week_number,       sizeof(uint16_t), 1, _buffer->output_file);
     fwrite(&data->gpsTs.tow,               sizeof(double),   1, _buffer->output_file);
     fwrite(&data->gpsTs.valid_flags,       sizeof(uint16_t), 1, _buffer->output_file);
     fwrite(data->accel.scaled_accel,       sizeof(float),    3, _buffer->output_file);
     fwrite(data->deltaV.delta_velocity,    sizeof(float),    3, _buffer->output_file);
     fwrite(data->q.q,                      sizeof(float),    4, _buffer->output_file);
-    uint8_t flagStop = (uint8_t)_buffer->flag.flagStop;
-    fwrite(&flagStop,                      sizeof(uint8_t),  1, _buffer->output_file);
+    uint8_t flag = (uint8_t)_buffer->flag.flagStop;
+    fwrite(&flag,                          sizeof(uint8_t),  1, _buffer->output_file);
 }
 
 void save_filter_data(filter_buffer_t*  _buffer){
 
     const filterData_t* data = &_buffer->sample;
 
-    uint64_t time = mip_gps_to_unix_ms(data->gpsTs);
+    // uint64_t time = mip_gps_to_unix_ms(data->gpsTs);
 
     /* Binary record layout:
      *   uint64_t  time
@@ -1408,7 +1417,7 @@ void save_filter_data(filter_buffer_t*  _buffer){
      *   uint16_t  q.valid_flags
      *   uint8_t   flagStop
      */
-    fwrite(&time,                    sizeof(uint64_t), 1, _buffer->output_file);
+    fwrite(&data->gpsTs.week_number, sizeof(uint16_t), 1, _buffer->output_file);
     fwrite(&data->gpsTs.tow,         sizeof(double),   1, _buffer->output_file);
     fwrite(&data->gpsTs.valid_flags, sizeof(uint16_t), 1, _buffer->output_file);
     fwrite(data->accel.accel,        sizeof(float),    3, _buffer->output_file);
@@ -1419,8 +1428,8 @@ void save_filter_data(filter_buffer_t*  _buffer){
     fwrite(&data->g.valid_flags,     sizeof(uint16_t), 1, _buffer->output_file);
     fwrite(data->q.q,                sizeof(float),    4, _buffer->output_file);
     fwrite(&data->q.valid_flags,     sizeof(uint16_t), 1, _buffer->output_file);
-    uint8_t flagStop = (uint8_t)_buffer->flag.flagStop;
-    fwrite(&flagStop,                sizeof(uint8_t),  1, _buffer->output_file);
+    uint8_t flag = (uint8_t)_buffer->flag.flagStop;
+    fwrite(&flag    ,                sizeof(uint8_t),  1, _buffer->output_file);
 
 }
 
@@ -1458,6 +1467,7 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
     sensor_buffer_t* sampleBuffer = (sensor_buffer_t*)_user;
     
     if (sampleBuffer == NULL) return;
+
     
     // Field object for iterating the packet and extracting each field
     mip_field_view field_view;
@@ -1468,35 +1478,37 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
     sensorData_t* sensorData = &sampleBuffer->pending_sensorData;
     sensorR_t*    sensor     = &sampleBuffer->pending_sensor;
     
-    static uint16_t counter = 0;
     
-    
+    microstrain_serializer serializer;
 
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
 
+        microstrain_serializer_init_from_field(&serializer, &field_view);
 
         if(sensor->value == 0b00001111) break; // If all data has been extracted, break the loop
 
         switch( mip_field_field_descriptor(&field_view) ){
             
+            
             case MIP_DATA_DESC_SHARED_GPS_TIME:
-                sensor->bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &sensorData->gpsTs) ? 1 : 0;
+                sensor->bits.gpsTs = 1;
+                extract_mip_shared_gps_timestamp_data(&serializer, &sensorData->gpsTs);
                 break;
 
             case MIP_DATA_DESC_SENSOR_ACCEL_SCALED:
-                if(sensor->bits.accel == 0) sensor->bits.accel = extract_mip_sensor_scaled_accel_data_from_field(&field_view, &sensorData->accel) ? 1 : 0;
+                sensor->bits.accel = 1;
+                extract_mip_sensor_scaled_accel_data(&serializer, &sensorData->accel);
                 break;
 
             case MIP_DATA_DESC_SENSOR_DELTA_VELOCITY:
-                if(sensor->bits.deltaV == 0) sensor->bits.deltaV = extract_mip_sensor_delta_velocity_data_from_field(&field_view, &sensorData->deltaV) ? 1 : 0;
+                sensor->bits.deltaV = 1 ;
+                extract_mip_sensor_delta_velocity_data(&serializer, &sensorData->deltaV);
                 break;
 
              case MIP_DATA_DESC_SENSOR_COMP_QUATERNION:
-                if(sensor->bits.q == 0) sensor->bits.q = extract_mip_sensor_comp_quaternion_data_from_field(&field_view, &sensorData->q) ? 1 : 0;
-                break;
-
-             case MIP_DATA_DESC_SHARED_REFERENCE_TIME:
+                sensor->bits.q = 1;
+                extract_mip_sensor_comp_quaternion_data(&serializer, &sensorData->q);
                 break;
 
              default:
@@ -1505,7 +1517,6 @@ static void sensor_packet_callback(void* _user, const mip_packet_view* _packet_v
 
     }
 
-    counter ++ ;
 
     if(sensor->value != 0b00001111) return;
 
@@ -1531,6 +1542,7 @@ static void filter_packet_callback(void* _user, const mip_packet_view* _packet_v
 
     if (sampleBuffer == NULL) return;
 
+
     // Field object for iterating the packet and extracting each field
     mip_field_view field_view;
     mip_field_init_empty(&field_view);
@@ -1539,38 +1551,44 @@ static void filter_packet_callback(void* _user, const mip_packet_view* _packet_v
     // and prevent correct reset between packets when threading is enabled)
     filterData_t* filterData = &sampleBuffer->pending_filterData;
     filterR_t*    filter     = &sampleBuffer->pending_filter;
-    
+
+     microstrain_serializer serializer;
     
     while (mip_field_next_in_packet(&field_view, _packet_view))
     {
+        microstrain_serializer_init_from_field(&serializer, &field_view);
+
         if(filter->value == 0b00011111) break; // If all data has been extracted, break the loop
         
         switch(mip_field_field_descriptor(&field_view)){
             
             case MIP_DATA_DESC_SHARED_GPS_TIME:
-                    filter->bits.gpsTs = extract_mip_shared_gps_timestamp_data_from_field(&field_view, &filterData->gpsTs) ? 1 : 0;
+                filter->bits.gpsTs = 1;
+                extract_mip_shared_gps_timestamp_data(&serializer, &filterData->gpsTs);
                 break;
 
             case MIP_DATA_DESC_FILTER_LINEAR_ACCELERATION:
-                if(filter->bits.accel == 0) filter->bits.accel = extract_mip_filter_linear_accel_data_from_field(&field_view, &filterData->accel) ? 1 : 0;
+                filter->bits.accel = 1;
+                extract_mip_filter_linear_accel_data(&serializer, &filterData->accel);
                 break;
 
             case MIP_DATA_DESC_FILTER_COMPENSATED_ANGULAR_RATE:
-                if(filter->bits.ang == 0) filter->bits.ang = extract_mip_filter_comp_angular_rate_data_from_field(&field_view, &filterData->ang) ? 1 : 0;
+                filter->bits.ang = 1;
+                extract_mip_filter_comp_angular_rate_data(&serializer, &filterData->ang);
                 break;
                 
             case MIP_DATA_DESC_FILTER_GRAVITY_VECTOR:
-                if(filter->bits.g == 0) filter->bits.g = extract_mip_filter_gravity_vector_data_from_field(&field_view, &filterData->g) ? 1 : 0;
+                filter->bits.g = 1;
+                extract_mip_filter_gravity_vector_data(&serializer, &filterData->g);
                 break;
 
              case MIP_DATA_DESC_FILTER_ATT_QUATERNION:
-                if(filter->bits.q == 0) filter->bits.q = extract_mip_filter_attitude_quaternion_data_from_field(&field_view, &filterData->q) ? 1 : 0;
-                break;
-               
-             case MIP_DATA_DESC_FILTER_FILTER_STATUS:
+                filter->bits.q = 1;
+                extract_mip_filter_attitude_quaternion_data(&serializer, &filterData->q);
                 break;
 
              default:
+             
                 break;
         }
 
